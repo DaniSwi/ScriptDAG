@@ -25,7 +25,7 @@ def procesar_instancia(file_path, output_npz_name):
     
     # Convertimos las ecuaciones simbólicas de SymPy a strings estándar.
     # Esto nos permite serializarlas de forma masiva y segura dentro de la arquitectura de NumPy.
-    shell_eqs_strs = np.array([f"{str(lhs)} = {str(rhs)}" for lhs, rhs in shell_equations])
+    shell_eqs_strs = np.array([f"{str(lhs)} {op} {str(rhs)}" for lhs, op, rhs in shell_equations])
     
     # 4. Capa de Exportación y Almacenamiento
     print(f"3. Empaquetando y guardando datos consolidados en: {output_npz_name}...")
@@ -43,8 +43,8 @@ def procesar_instancia(file_path, output_npz_name):
 
 if __name__ == "__main__":
     #aca se coloca la ruta del archivo 
-    ruta_instancia = 'instances/inst001.txt'
-    ruta_salida = 'outputs/subsistema_n_ario_test.npz' #cambiar nombres por acomodo
+    ruta_instancia = 'instances/instprofe.txt'
+    ruta_salida = 'outputs/subsistema_n_ario_profe.npz' #cambiar nombres por acomodo
     
     procesar_instancia(ruta_instancia, ruta_salida)
 

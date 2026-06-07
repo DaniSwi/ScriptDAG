@@ -75,15 +75,13 @@ def extract_linear_system(constraints):
     # ==========================================
     # LÓGICA PRINCIPAL DEL EXTRACTOR
     # ==========================================
-    for lhs_expr, rhs_val in constraints:
-        # Construimos el DAG (Mantenemos la lógica de la sección 3.1)
-        build_dag_node(lhs_expr)
+    for lhs_expr, op, rhs_val in constraints:
         
-        # Aplicamos nuestro "bisturí" a la expresión del lado izquierdo
+        build_dag_node(lhs_expr)
         shell_lhs = replace_and_extract_sums(lhs_expr)
         
         # Guardamos la ecuación cascarón final (ej. w_0**-1 = -0.12389)
-        shell_equations.append((shell_lhs, rhs_val))
+        shell_equations.append((shell_lhs, op, rhs_val))
 
     # Construimos la matriz numpy A final
     num_rows = len(A_rows)

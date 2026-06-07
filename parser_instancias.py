@@ -3,8 +3,8 @@ import sympy as sp
 
 def parse_instance(file_path):
     """
-    Lee el archivo .txt de la instancia y extrae las variables y restricciones.
-    Retorna un diccionario de variables y una lista de ecuaciones SymPy.
+    Lee el archivo de texto y extrae variables y restricciones.
+    Soporta mayúsculas/minúsculas y operadores de inecuación (>=, <=, =).
     """
     variables = {}
     constraints = []
@@ -18,15 +18,24 @@ def parse_instance(file_path):
         if not line or line.startswith('//'):
             continue
             
-        if line == 'Variables':
+        line_lower = line.lower()
+        
+        # 1. Ignoramos la función objetivo (nuestro sistema procesa el DAG de restricciones)
+        if line_lower.startswith('minimize') or line_lower.startswith('maximize'):
+            print(" [!] Nota: Función objetivo detectada y omitida de la matriz.")
+            continue
+            
+        # 2. Detección flexible de secciones
+        if line_lower == 'variables':
             mode = 'vars'
             continue
-        elif line == 'Constraints':
+        elif line_lower == 'constraints':
             mode = 'constraints'
             continue
-        elif line == 'end':
+        elif line_lower == 'end':
             break
             
+        # 3. Extracción de datos
         if mode == 'vars':
             match = re.match(r'([a-zA-Z0-9_]+)\s+in\s+\[.*\];', line)
             if match:
@@ -35,12 +44,18 @@ def parse_instance(file_path):
                 
         elif mode == 'constraints':
             line = line.rstrip(';')
-            if '=' in line:
-                lhs_str, rhs_str = line.split('=')
+            
+            # Rompemos la línea usando CUALQUIER operador relacional
+            parts = re.split(r'(>=|<=|==|=|>|<)', line)
+            
+            if len(parts) == 3:
+                lhs_str, op, rhs_str = parts
                 lhs_str = lhs_str.replace('^', '**')
                 
                 lhs_expr = sp.sympify(lhs_str, locals=variables)
                 rhs_val = float(rhs_str)
-                constraints.append((lhs_expr, rhs_val))
+                
+                # AHORA GUARDAMOS 3 COSAS: (Lado_Izquierdo, Operador, Lado_Derecho)
+                constraints.append((lhs_expr, op, rhs_val))
                 
     return variables, constraints
