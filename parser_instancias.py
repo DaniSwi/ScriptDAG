@@ -20,12 +20,12 @@ def parse_instance(file_path):
             
         line_lower = line.lower()
         
-        # 1. Ignoramos la función objetivo (nuestro sistema procesa el DAG de restricciones)
+        #Se ignora la funcion objetivo, porque no es relevante en el pre-procesmaiento de las restricciones. 
         if line_lower.startswith('minimize') or line_lower.startswith('maximize'):
             print(" [!] Nota: Función objetivo detectada y omitida de la matriz.")
             continue
             
-        # 2. Detección flexible de secciones
+        #Detectamos los encabezados de sección para saber qué tipo de datos estamos leyendo
         if line_lower == 'variables':
             mode = 'vars'
             continue
@@ -35,7 +35,7 @@ def parse_instance(file_path):
         elif line_lower == 'end':
             break
             
-        # 3. Extracción de datos
+        #Extraemos los datos según el modo actual
         if mode == 'vars':
             match = re.match(r'([a-zA-Z0-9_]+)\s+in\s+\[.*\];', line)
             if match:
