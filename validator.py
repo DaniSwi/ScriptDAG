@@ -8,7 +8,8 @@ def validar_sistema(ruta_instancia, ruta_npz, verbose=True):
     print(" INICIANDO AUDITORÍA MATEMÁTICA (VALIDACIÓN CON SYMPY)")
     print("======================================================\n")
 
-    _, original_constraints = parse_instance(ruta_instancia)
+    # Extraemos las restricciones e ignoramos las variables y los dominios
+    _, _, original_constraints = parse_instance(ruta_instancia)
     
     datos = np.load(ruta_npz)
     A_matrix = datos['A']

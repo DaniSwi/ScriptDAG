@@ -3,10 +3,11 @@ import sympy as sp
 
 def parse_instance(file_path):
     """
-    Lee el archivo de texto y extrae variables y restricciones.
+    Lee el archivo de texto y extrae variables, dominios y restricciones.
     Soporta mayúsculas/minúsculas y operadores de inecuación (>=, <=, =).
     """
     variables = {}
+    domains = {}
     constraints = []
     
     with open(file_path, 'r') as f:
@@ -20,12 +21,12 @@ def parse_instance(file_path):
             
         line_lower = line.lower()
         
-        #Se ignora la funcion objetivo, porque no es relevante en el pre-procesmaiento de las restricciones. 
+        # Se ignora la funcion objetivo, porque no es relevante en el pre-procesamiento de las restricciones. 
         if line_lower.startswith('minimize') or line_lower.startswith('maximize'):
             print(" [!] Nota: Función objetivo detectada y omitida de la matriz.")
             continue
             
-        #Detectamos los encabezados de sección para saber qué tipo de datos estamos leyendo
+        # Detectamos los encabezados de sección para saber qué tipo de datos estamos leyendo
         if line_lower == 'variables':
             mode = 'vars'
             continue
@@ -35,12 +36,14 @@ def parse_instance(file_path):
         elif line_lower == 'end':
             break
             
-        #Extraemos los datos según el modo actual
+        # Extraemos los datos según el modo actual
         if mode == 'vars':
-            match = re.match(r'([a-zA-Z0-9_]+)\s+in\s+\[.*\];', line)
+            match = re.match(r'([a-zA-Z0-9_]+)\s+in\s+(\[.*?\]);', line)
             if match:
                 var_name = match.group(1)
+                var_domain = match.group(2)
                 variables[var_name] = sp.Symbol(var_name)
+                domains[var_name] = var_domain
                 
         elif mode == 'constraints':
             line = line.rstrip(';')
@@ -58,4 +61,4 @@ def parse_instance(file_path):
                 # AHORA GUARDAMOS 3 COSAS: (Lado_Izquierdo, Operador, Lado_Derecho)
                 constraints.append((lhs_expr, op, rhs_val))
                 
-    return variables, constraints
+    return variables, domains, constraints
