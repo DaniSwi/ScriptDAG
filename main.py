@@ -2,8 +2,9 @@ import numpy as np
 from parser_instancias import parse_instance
 from matrix_extractor import extract_linear_system
 import dag_builder
+from exportator import procesar_instancia
 
-def procesar_instancia(file_path, output_npz_name):
+def asd(file_path, output_npz_name):
     print(f"--- Iniciando Pre-procesamiento de: {file_path} ---")
     
     # 1. Limpiar memoria del caché del DAG
@@ -44,9 +45,10 @@ def procesar_instancia(file_path, output_npz_name):
 if __name__ == "__main__":
     #aca se coloca la ruta del archivo 
     ruta_instancia = 'instances/instprofe.txt'
-    ruta_salida = 'outputs/subsistema_n_ario_profe.npz' #cambiar nombres por acomodo
+    ruta_salida_npz = 'outputs/subsistema_n_ario_profe.npz' #cambiar nombres por acomodo
+    ruta_salida_txt = 'outputs/subsistema_n_ario_profe_legible.txt' #ruta para el archivo legible
     
-    procesar_instancia(ruta_instancia, ruta_salida)
+    procesar_instancia(ruta_instancia, ruta_salida_npz, ruta_salida_txt)
 
     #la instancia que entrega? un .npz que contiene:
     """
