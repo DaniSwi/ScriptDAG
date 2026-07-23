@@ -14,6 +14,7 @@ def parse_instance(file_path):
         lines = f.readlines()
         
     mode = None
+    
     for line in lines:
         line = line.strip()
         if not line or line.startswith('//'):
@@ -21,12 +22,12 @@ def parse_instance(file_path):
             
         line_lower = line.lower()
         
-        # Se ignora la funcion objetivo, porque no es relevante en el pre-procesamiento de las restricciones. 
+        # Ignoramos la función objetivo
         if line_lower.startswith('minimize') or line_lower.startswith('maximize'):
             print(" [!] Nota: Función objetivo detectada y omitida de la matriz.")
             continue
             
-        # Detectamos los encabezados de sección para saber qué tipo de datos estamos leyendo
+        # Detectamos los bloques
         if line_lower == 'variables':
             mode = 'vars'
             continue
@@ -36,7 +37,6 @@ def parse_instance(file_path):
         elif line_lower == 'end':
             break
             
-        # Extraemos los datos según el modo actual
         if mode == 'vars':
             match = re.match(r'([a-zA-Z0-9_]+)\s+in\s+(\[.*?\]);', line)
             if match:
@@ -47,8 +47,6 @@ def parse_instance(file_path):
                 
         elif mode == 'constraints':
             line = line.rstrip(';')
-            
-            # Rompemos la línea usando CUALQUIER operador relacional
             parts = re.split(r'(>=|<=|==|=|>|<)', line)
             
             if len(parts) == 3:
@@ -57,8 +55,6 @@ def parse_instance(file_path):
                 
                 lhs_expr = sp.sympify(lhs_str, locals=variables)
                 rhs_val = float(rhs_str)
-                
-                # AHORA GUARDAMOS 3 COSAS: (Lado_Izquierdo, Operador, Lado_Derecho)
                 constraints.append((lhs_expr, op, rhs_val))
                 
     return variables, domains, constraints
