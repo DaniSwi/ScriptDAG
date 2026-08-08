@@ -8,16 +8,13 @@ def validar_sistema(ruta_instancia, ruta_npz, verbose=True):
     print(" INICIANDO AUDITORÍA MATEMÁTICA (VALIDACIÓN CON SYMPY)")
     print("======================================================\n")
 
-    # Extraemos restricciones originales
     _, _, original_constraints = parse_instance(ruta_instancia)
-    
     datos = np.load(ruta_npz)
+    
     A_matrix = datos['A']
     y_names = datos['y']
     b_vector = datos['b']
     shell_eqs_strs = datos['shell_eqs']
-    
-    # Soporte para versiones anteriores del npz
     v_eqs_strs = datos.get('v_eqs', [])
 
     y_syms = [sp.sympify(y_str) for y_str in y_names]
@@ -25,6 +22,7 @@ def validar_sistema(ruta_instancia, ruta_npz, verbose=True):
     
     if verbose: print("--- FASE 1: RECONSTRUCCIÓN DE VARIABLES w_i y v_i ---")
         
+    # Reconstruir W (Suma matricial)
     for i in range(len(A_matrix)):
         expr_lineal = float(b_vector[i])
         for j in range(len(y_names)):
@@ -34,13 +32,17 @@ def validar_sistema(ruta_instancia, ruta_npz, verbose=True):
         w_simbolo = sp.Symbol(f'w_{i}')
         w_dict[w_simbolo] = expr_lineal
         
-    v_list = []
+    # Reconstruir V (Asignaciones)
+    v_dict = {}
     for eq_str in v_eqs_strs:
         lhs, rhs = str(eq_str).split('=')
-        v_list.append((sp.sympify(lhs.strip()), sp.sympify(rhs.strip())))
+        v_dict[sp.sympify(lhs.strip())] = sp.sympify(rhs.strip())
 
     print("\n--- FASE 2: SUSTITUCIÓN Y COMPROBACIÓN ---\n")
     validacion_exitosa = True
+    
+    # Unificamos todas las definiciones (W y V) en un solo diccionario
+    all_subs = {**w_dict, **v_dict}
     
     for i in range(len(original_constraints)):
         orig_lhs, orig_op, orig_rhs = original_constraints[i]
@@ -50,10 +52,13 @@ def validar_sistema(ruta_instancia, ruta_npz, verbose=True):
         shell_lhs_sym = sp.sympify(parts[0].strip())
         shell_rhs_val = float(parts[2].strip())
         
-        # Primero reemplazamos W, luego desenrollamos V en reversa
-        rec_lhs = shell_lhs_sym.subs(w_dict)
-        for v_sym, v_expr in reversed(v_list):
-            rec_lhs = rec_lhs.subs(v_sym, v_expr)
+        # 1. Desenrollamos TODO el DAG de forma iterativa y recursiva
+        rec_lhs = shell_lhs_sym
+        while True:
+            next_lhs = rec_lhs.subs(all_subs)
+            if next_lhs == rec_lhs:  # Si la ecuación ya no cambia, llegamos al fondo del grafo
+                break
+            rec_lhs = next_lhs
             
         if not np.isclose(orig_rhs, shell_rhs_val):
             print(f"  [!] ERROR: Los resultados (RHS) no coinciden.\n")
@@ -61,6 +66,10 @@ def validar_sistema(ruta_instancia, ruta_npz, verbose=True):
             continue
 
         diferencia = sp.simplify(orig_lhs - rec_lhs)
+        
+        # 2. Si simplify no es suficiente para fracciones algebraicas, forzamos la cancelación
+        if diferencia != 0:
+            diferencia = sp.cancel(diferencia)
         
         if diferencia == 0:
             if verbose: print(f"  [PASS] Equivalencia perfecta en ecuación {i}.")

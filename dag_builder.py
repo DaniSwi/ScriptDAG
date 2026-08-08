@@ -10,15 +10,11 @@ class DagNode:
         self.id = node_counter
         node_counter += 1
         self.expr = expr
-        self.ref_count = 1  # Contador de repeticiones para detectar CSE
+        self.ref_count = 1  # Contador para detectar subexpresiones comunes (CSE)
         self.children = []
 
 def build_dag_node(expr):
-    """
-    Construye el DAG fusionando subexpresiones comunes.
-    Cuenta las repeticiones para la Extracción No Lineal.
-    """
-    # Si la expresión matemática ya fue procesada, aumentamos su contador
+    """Construye el DAG fusionando subexpresiones comunes."""
     if expr in dag_nodes_cache:
         dag_nodes_cache[expr].ref_count += 1
         return dag_nodes_cache[expr]
@@ -26,7 +22,6 @@ def build_dag_node(expr):
     node = DagNode(expr)
     dag_nodes_cache[expr] = node
     
-    # Exploramos hijos de forma recursiva
     if hasattr(expr, 'args'):
         for arg in expr.args:
             child_node = build_dag_node(arg)

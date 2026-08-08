@@ -47,8 +47,9 @@ if __name__ == "__main__":
     ruta_instancia = 'instances/instprofe.txt'
     ruta_salida_npz = 'outputs/subsistema_n_ario_profe.npz' #cambiar nombres por acomodo
     ruta_salida_txt = 'outputs/subsistema_n_ario_profe_legible.txt' #ruta para el archivo legible
+
     
-    procesar_instancia(ruta_instancia, ruta_salida_npz, ruta_salida_txt)
+    procesar_instancia(ruta_instancia, ruta_salida_npz, ruta_salida_txt, False)
 
     #la instancia que entrega? un .npz que contiene:
     """
