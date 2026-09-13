@@ -1,112 +1,137 @@
+"""
+Capa 5: exportacion.
+
+Decision de diseno (D4 de la revision): la salida OFICIAL es un .npz ANEXO al
+sistema original.  NO se reescribe el problema con variables nuevas, porque el
+paper dice explicitamente "we do not modify the original system" y "we do not
+need concretization": las w_i y las y_j son ETIQUETAS de nodos del DAG, no
+variables nuevas del problema.  Reescribir el .txt (estilo I-CSE / Ceberio)
+sigue disponible con exportar_txt=True, pero ya no es el camino por defecto y
+marca las auxiliares como no bisectables.
+
+Arregla D5: el .npz de antes no traia ni las w, ni sus dominios, ni los
+dominios de y, ni el subsistema de productos; era imposible armar A*y = b
+sin re-parsear strings.
+
+Contenido del .npz
+------------------
+  A            (m,n) float64   matriz de coeficientes
+  c            (m,)  float64   termino constante de cada fila:  w_i = c_i + A[i]*y
+  A_aug        (m,n+m)         [A | -I]  tal que  A_aug * [y;w] = -c
+  A_fila/col/num/den            A en aritmetica EXACTA (COO de racionales)
+  y_names, y_lo, y_hi           columnas y sus dominios (sound)
+  w_names, w_lo, w_hi           filas y sus dominios (sound)
+  w_es_columna                  indice de columna de cada w, o -1 (columnas mixtas)
+  var_names, var_lo, var_hi     variables ORIGINALES del problema
+  prod_nombre/tipo/dato/args    subsistema no lineal (Proposicion 1)
+  restricciones                 'nodo op rhs' (ecuaciones cascaron)
+  meta_*                        conteos para auditoria
+"""
+
 import numpy as np
-import sympy as sp
-import re
+
+import dominios
+import intervals as iv
+from matrix_extractor import extraer_sistema_lineal, registrar_restricciones
 from parser_instancias import parse_instance
-from matrix_extractor import extract_linear_system
-import dag_builder
 
-def parse_domain_string(dom_str):
-    numeros = re.findall(r'-?\d+\.?\d*(?:e-?\d+)?', dom_str)
-    if len(numeros) == 2: return [float(numeros[0]), float(numeros[1])]
-    return [-1e8, 1e8]
 
-def calcular_dominios_w(A, y_vars, b, domains_dict):
-    w_domains = {}
-    limites_y = [parse_domain_string(domains_dict.get(var, "[-1e8, 1e8]")) for var in y_vars]
-    for i in range(A.shape[0]):
-        min_w = float(b[i]); max_w = float(b[i])
-        for j in range(len(y_vars)):
-            coef = A[i, j]; min_y, max_y = limites_y[j]
-            if coef > 0: min_w += coef * min_y; max_w += coef * max_y
-            elif coef < 0: min_w += coef * max_y; max_w += coef * min_y 
-        w_domains[f"w_{i}"] = [min_w, max_w]
-    return w_domains
+def construir(ruta_instancia, calcular_dominios=True, distribuir_sumas_escaladas=False):
+    """parse -> DAG -> sistema lineal -> dominios.  Devuelve (inst, sis, dom)."""
+    inst = parse_instance(ruta_instancia, distribuir_sumas_escaladas)
+    sis = extraer_sistema_lineal(inst.dag)
+    registrar_restricciones(sis, inst.raices, inst.ops, inst.rhs)
+    dom = dominios.propagar_dominios(inst.dag, inst.var_domains) if calcular_dominios else None
+    return inst, sis, dom
 
-def calcular_dominios_v(v_equations, known_domains):
-    v_domains = {}
-    for v_sym, expr in v_equations:
-        def eval_interval(ex):
-            if isinstance(ex, sp.Number): val = float(ex); return [val, val]
-            if isinstance(ex, sp.Symbol): return known_domains.get(str(ex), [-1e8, 1e8])
-            if isinstance(ex, sp.Mul):
-                args_intervals = [eval_interval(arg) for arg in ex.args]
-                res = args_intervals[0]
-                for i in range(1, len(args_intervals)):
-                    I1, I2 = res, args_intervals[i]
-                    p = [I1[0]*I2[0], I1[0]*I2[1], I1[1]*I2[0], I1[1]*I2[1]]
-                    res = [min(p), max(p)]
-                return res
-            if isinstance(ex, sp.Pow):
-                base_i = eval_interval(ex.base); exp_i = eval_interval(ex.exp)
-                if exp_i[0] == exp_i[1] and int(exp_i[0]) == exp_i[0]:
-                    n = int(exp_i[0])
-                    if n % 2 != 0: return [base_i[0]**n, base_i[1]**n]
-                    else:
-                        if base_i[0] <= 0 <= base_i[1]: return [0, max(base_i[0]**n, base_i[1]**n)]
-                        else: return [min(base_i[0]**n, base_i[1]**n), max(base_i[0]**n, base_i[1]**n)]
-            if isinstance(ex, (sp.sin, sp.cos)): return [-1.0, 1.0]
-            return [-1e8, 1e8]
-        dom = eval_interval(expr)
-        v_domains[str(v_sym)] = dom
-        known_domains[str(v_sym)] = dom 
-    return v_domains
 
-def exportar_a_txt(A, y_vars, b, shell_eqs_strs, v_equations, vars_dict, domains_dict, w_domains, v_domains, output_txt_name, usar_dominios):
-    y_syms = [sp.sympify(y) for y in y_vars]
-    num_w = A.shape[0]
-    
-    with open(output_txt_name, 'w') as f:
+def _cajas(nodos, dom):
+    if dom is None:
+        return (np.full(len(nodos), -np.inf), np.full(len(nodos), np.inf))
+    lo = np.array([dom[n.id][0] for n in nodos], dtype=float)
+    hi = np.array([dom[n.id][1] for n in nodos], dtype=float)
+    return lo, hi
+
+
+def exportar_npz(ruta_npz, inst, sis, dom):
+    filas, cols, nums, dens = [], [], [], []
+    for i, fila in enumerate(sis.A_exacta):
+        for j, q in fila.items():
+            filas.append(i); cols.append(j)
+            nums.append(str(q.numerator)); dens.append(str(q.denominator))
+
+    y_lo, y_hi = _cajas(sis.y_nodes, dom)
+    w_lo, w_hi = _cajas(sis.w_nodes, dom)
+    var_lo = np.array([inst.var_domains[v][0] for v in inst.var_names], dtype=float)
+    var_hi = np.array([inst.var_domains[v][1] for v in inst.var_names], dtype=float)
+    A_aug, rhs_aug = sis.aumentada()
+
+    np.savez(
+        ruta_npz,
+        A=sis.A, c=sis.c, A_aug=A_aug, rhs_aug=rhs_aug,
+        A_fila=np.array(filas, dtype=np.int64), A_col=np.array(cols, dtype=np.int64),
+        A_num=np.array(nums), A_den=np.array(dens),
+        y_names=np.array(sis.y_names), y_lo=y_lo, y_hi=y_hi,
+        w_names=np.array(sis.w_names), w_lo=w_lo, w_hi=w_hi,
+        w_es_columna=np.array([sis.col_de_nodo.get(n.id, -1) for n in sis.w_nodes],
+                              dtype=np.int64),
+        var_names=np.array(inst.var_names), var_lo=var_lo, var_hi=var_hi,
+        prod_nombre=np.array([p[0] for p in sis.subsistema_productos]),
+        prod_tipo=np.array([p[1] for p in sis.subsistema_productos]),
+        prod_dato=np.array([p[2] for p in sis.subsistema_productos]),
+        prod_args=np.array([" | ".join(p[3]) for p in sis.subsistema_productos]),
+        restricciones=np.array([f"{a} {b} {c!r}" for a, b, c in sis.restricciones]),
+        meta_n_restricciones=np.int64(inst.n_restricciones()),
+        meta_lineas_restriccion=np.int64(inst.lineas_restriccion),
+        meta_n_nodos=np.int64(len(inst.dag.nodes)),
+        meta_aux_nuevas=np.int64(0),
+    )
+
+
+def exportar_txt(ruta_txt, inst, sis, dom):
+    """Salida OPCIONAL estilo Ceberio: sistema reescrito con w_i explicitas.
+
+    Solo para alimentar un solver que no se puede tocar por dentro.  Las
+    auxiliares se marcan como no bisectables y sus dominios son sound
+    (-inf/inf cuando no se pueden acotar), nunca el [-1e8,1e8] de antes (B2).
+    """
+    def dstr(par):
+        lo, hi = par
+        f = lambda v: ('-inf' if v == -np.inf else ('inf' if v == np.inf else repr(float(v))))
+        return f"[{f(lo)}, {f(hi)}]"
+
+    y_lo, y_hi = _cajas(sis.y_nodes, dom)
+    w_lo, w_hi = _cajas(sis.w_nodes, dom)
+
+    with open(ruta_txt, 'w') as f:
+        f.write("// Reescritura estilo I-CSE/Ceberio del sistema original.\n")
+        f.write("// Las variables w_i son AUXILIARES: no deben bisectarse.\n")
         f.write("variables\n")
-        # Variables originales
-        for var_name in vars_dict.keys():
-            f.write(f"  {var_name} in {domains_dict.get(var_name, '[-1e8, 1e8]')};\n")
-            
-        # Variables W
-        for i in range(num_w):
-            dom_str = f"[{w_domains[f'w_{i}'][0]}, {w_domains[f'w_{i}'][1]}]" if usar_dominios else "[-1e8, 1e8]"
-            f.write(f"  w_{i} in {dom_str};\n")
-            
-        # Variables V
-        for v_sym, _ in v_equations:
-            dom_str = f"[{v_domains[str(v_sym)][0]}, {v_domains[str(v_sym)][1]}]" if usar_dominios else "[-1e8, 1e8]"
-            f.write(f"  {v_sym} in {dom_str};\n")
-            
+        for v in inst.var_names:
+            f.write(f"  {v} in {dstr(inst.var_domains[v])};\n")
+        for k, nombre in enumerate(sis.w_names):
+            f.write(f"  {nombre} in {dstr((w_lo[k], w_hi[k]))};   // no-bisectable\n")
         f.write("\nconstraints\n")
-        
-        # Ecuaciones W (Matriz)
-        for i in range(num_w):
-            expr_lineal = float(b[i])
-            for j in range(len(y_vars)):
-                coeff = A[i, j]
-                if coeff != 0: expr_lineal += coeff * y_syms[j]
-            expr_str = str(expr_lineal).replace('**', '^').replace(' ', '')
-            f.write(f"  w_{i}={expr_str};\n")
-            
-        # Ecuaciones V (No lineales / Multiplicaciones)
-        for v_sym, expr in v_equations:
-            expr_str = str(expr).replace('**', '^').replace(' ', '')
-            f.write(f"  {v_sym}={expr_str};\n")
-            
-        # Cascarones Topológicos
-        for eq_str in shell_eqs_strs:
-            eq_format = str(eq_str).replace('**', '^')
-            f.write(f"  {eq_format};\n")
+        for i, nombre in enumerate(sis.w_names):
+            piezas = []
+            const = sis.c_exacta[i]
+            if const != 0:
+                piezas.append(str(float(const)))
+            for j, q in sorted(sis.A_exacta[i].items()):
+                col = sis.y_names[j].replace('^', '^')
+                piezas.append(f"({float(q)})*({col})" if q != 1 else f"({col})")
+            f.write(f"  {nombre} = {' + '.join(piezas) if piezas else '0'};\n")
+        for nombre, op, rhs in sis.restricciones:
+            f.write(f"  {nombre} {op} {rhs!r};\n")
         f.write("end\n")
 
-def procesar_instancia(file_path, output_npz_name, output_txt_name, calcular_dominios=False):
-    dag_builder.clear_cache()
-    vars_dict, domains_dict, constr_list = parse_instance(file_path)
-    A, y_vars, b, shell_equations, v_equations = extract_linear_system(constr_list)
-    shell_eqs_strs = np.array([f"{str(lhs)} {op} {str(rhs)}" for lhs, op, rhs in shell_equations])
-    v_eqs_strs = np.array([f"{str(sym)}={str(expr)}" for sym, expr in v_equations])
-    
-    w_domains = {}
-    v_domains = {}
-    if calcular_dominios:
-        known_domains = {var: parse_domain_string(dom) for var, dom in domains_dict.items()}
-        w_domains = calcular_dominios_w(A, y_vars, b, domains_dict)
-        known_domains.update(w_domains)
-        v_domains = calcular_dominios_v(v_equations, known_domains)
-    
-    np.savez(output_npz_name, A=A, y=y_vars, b=b, shell_eqs=shell_eqs_strs, v_eqs=v_eqs_strs)
-    exportar_a_txt(A, y_vars, b, shell_eqs_strs, v_equations, vars_dict, domains_dict, w_domains, v_domains, output_txt_name, calcular_dominios)
+
+def procesar_instancia(ruta_instancia, ruta_npz, ruta_txt=None,
+                       calcular_dominios=True, exportar_texto=False,
+                       distribuir_sumas_escaladas=False):
+    inst, sis, dom = construir(ruta_instancia, calcular_dominios,
+                               distribuir_sumas_escaladas)
+    exportar_npz(ruta_npz, inst, sis, dom)
+    if exportar_texto and ruta_txt:
+        exportar_txt(ruta_txt, inst, sis, dom)
+    return inst, sis, dom

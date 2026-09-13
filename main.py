@@ -1,64 +1,60 @@
-import numpy as np
-from parser_instancias import parse_instance
-from matrix_extractor import extract_linear_system
-import dag_builder
-from exportator import procesar_instancia
+"""
+Punto de entrada.  Uso:
 
-def asd(file_path, output_npz_name):
-    print(f"--- Iniciando Pre-procesamiento de: {file_path} ---")
-    
-    # 1. Limpiar memoria del caché del DAG
-    # Esto es crucial para garantizar consistencia si procesas múltiples archivos en un bucle
-    dag_builder.clear_cache()
-    
-    # 2. Capa de Parseo
-    print("1. Cargando archivo y construyendo árboles matemáticos en SymPy...")
-    vars_dict, constr_list = parse_instance(file_path)
-    
-    # 3. Capa de Construcción del DAG y Extracción
-    print("2. Ejecutando análisis del DAG y extrayendo componentes lineales y no lineales...")
-    # Ahora recibimos los 4 elementos, incluyendo las ecuaciones cascarón
-    A, y_vars, b, shell_equations = extract_linear_system(constr_list)
-    
-    print(f"   [INFO] Dimensiones de la Matriz A (Coeficientes lineales): {A.shape}")
-    print(f"   [INFO] Cantidad de términos variables en vector 'y': {len(y_vars)}")
-    print(f"   [INFO] Cantidad de ecuaciones cascarón estructurales 'w': {len(shell_equations)}")
-    
-    # Convertimos las ecuaciones simbólicas de SymPy a strings estándar.
-    # Esto nos permite serializarlas de forma masiva y segura dentro de la arquitectura de NumPy.
-    shell_eqs_strs = np.array([f"{str(lhs)} {op} {str(rhs)}" for lhs, op, rhs in shell_equations])
-    
-    # 4. Capa de Exportación y Almacenamiento
-    print(f"3. Empaquetando y guardando datos consolidados en: {output_npz_name}...")
-    # Agregamos 'shell_eqs' como un arreglo de texto dentro del mismo contenedor comprimido .npz
-    np.savez(output_npz_name, A=A, y=y_vars, b=b, shell_eqs=shell_eqs_strs)
-    
-    # Vista previa informativa en la consola de comandos
-    print("\n======================================================================")
-    print("   VISTA PREVIA DE LAS ECUACIONES CASCARÓN (ESTRUCTURA NO LINEAL)")
-    print("======================================================================")
-    for idx, eq in enumerate(shell_eqs_strs):
-        print(f" Restricción {idx}: {eq}")
-    print("======================================================================")
-    print("¡Pre-procesamiento completado! El archivo está listo para ser auditado.\n")
+    python main.py instances/inst001.txt            # una instancia
+    python main.py instances/inst001.txt --txt      # ademas el .txt reescrito
+    python main.py --lote                           # toda la carpeta instances/
+
+Se elimino la funcion asd(), que estaba rota (B4: desempaquetaba 2 y 4 valores
+de funciones que devuelven 3 y 5) y era codigo muerto.
+
+Que contiene el .npz (D5):  A, c, A_aug=[A|-I], A exacta en COO racional,
+y_names/y_lo/y_hi, w_names/w_lo/w_hi, var_names/var_lo/var_hi, el subsistema
+de productos y las ecuaciones cascaron.  Con eso se arma  A*y + c = w  sin
+tener que re-parsear ningun string:
+
+    import numpy as np
+    z = np.load('outputs/inst001.npz')
+    A, c, y, w = z['A'], z['c'], z['y_names'], z['w_names']
+"""
+
+import os
+import sys
+
+from batch_processor import procesar_carpeta
+from exportator import construir, exportar_npz, exportar_txt
+from validator import validar
+
+
+def procesar_uno(ruta, carpeta_salida='outputs', exportar_texto=False,
+                 calcular_dominios=True):
+    os.makedirs(carpeta_salida, exist_ok=True)
+    base = os.path.splitext(os.path.basename(ruta))[0]
+    print(f"--- Pre-procesamiento de {ruta} ---")
+    inst, sis, dom = construir(ruta, calcular_dominios)
+    print(f"  DAG      : {inst.dag.resumen()}")
+    print(f"  sistema  : {sis.resumen()}")
+    print(f"  A        : {sis.A.shape[0]} filas (w) x {sis.A.shape[1]} columnas (y)")
+    npz = os.path.join(carpeta_salida, f"{base}.npz")
+    exportar_npz(npz, inst, sis, dom)
+    print(f"  escrito  : {npz}")
+    if exportar_texto:
+        txt = os.path.join(carpeta_salida, f"{base}_reescrita.txt")
+        exportar_txt(txt, inst, sis, dom)
+        print(f"  escrito  : {txt}")
+    validar(inst, sis, dom)
+    return inst, sis, dom
+
 
 if __name__ == "__main__":
-    #aca se coloca la ruta del archivo 
-    ruta_instancia = 'instances/instprofe.txt'
-    ruta_salida_npz = 'outputs/subsistema_n_ario_profe.npz' #cambiar nombres por acomodo
-    ruta_salida_txt = 'outputs/subsistema_n_ario_profe_legible.txt' #ruta para el archivo legible
-
-    
-    procesar_instancia(ruta_instancia, ruta_salida_npz, ruta_salida_txt, False)
-
-    #la instancia que entrega? un .npz que contiene:
-    """
-    datos['A'] = matriz de coeficientes
-    datos['y'] = vector de variables ['x22', 'x32'] etc.
-    datos['b'] = vector de resultados 
-    """
-
-    """
-    Entonces las personas que quieran usar el .npz para desempaquetar
-    los datos, importan numpy y usan el metodo np.load(elnombredelarchivo) y así lo tienen
-    """
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    flags = {a for a in sys.argv[1:] if a.startswith('--')}
+    if '--lote' in flags or not args:
+        procesar_carpeta('instances', 'outputs',
+                         calcular_dominios='--sin-dominios' not in flags,
+                         exportar_texto='--txt' in flags,
+                         validar_todo='--sin-validar' not in flags)
+    else:
+        for ruta in args:
+            procesar_uno(ruta, exportar_texto='--txt' in flags,
+                         calcular_dominios='--sin-dominios' not in flags)

@@ -1,52 +1,71 @@
-import os
+"""
+Capa 7: procesamiento masivo de una carpeta de instancias.
+
+Cambios: la validacion vuelve a estar ACTIVADA (antes estaba comentada porque
+sp.simplify se colgaba en instprofe; el validator nuevo no usa simplify).
+Ademas se imprime el resumen del sistema de cada instancia, que es lo que
+permite ver de un vistazo si la matriz es la del paper o la de incidencia.
+"""
+
 import glob
-from exportator import procesar_instancia
-from validator import validar_sistema
+import os
+import time
+import traceback
 
-def procesar_carpeta(carpeta_entrada, carpeta_salida, calcular_dominios):
-    if not os.path.exists(carpeta_salida):
-        os.makedirs(carpeta_salida)
+from exportator import construir, exportar_npz, exportar_txt
+from validator import validar
 
-    archivos_txt = glob.glob(os.path.join(carpeta_entrada, '*.txt'))
-    
-    if not archivos_txt:
-        print(f"[!] No se encontraron archivos .txt en '{carpeta_entrada}'.")
+
+def procesar_carpeta(carpeta_entrada, carpeta_salida, calcular_dominios=True,
+                     exportar_texto=False, validar_todo=True,
+                     distribuir_sumas_escaladas=False):
+    os.makedirs(carpeta_salida, exist_ok=True)
+    archivos = sorted(glob.glob(os.path.join(carpeta_entrada, '*.txt')))
+    if not archivos:
+        print(f"[!] No hay .txt en '{carpeta_entrada}'.")
         return
 
-    print(f"===========================================================")
-    print(f" INICIANDO PROCESAMIENTO MASIVO: {len(archivos_txt)} instancias")
-    print(f" CÁLCULO DE INTERVALOS: {'ACTIVADO' if calcular_dominios else 'DESACTIVADO (Infinito por defecto)'}")
-    print(f"===========================================================\n")
+    print("=" * 72)
+    print(f" PROCESAMIENTO MASIVO: {len(archivos)} instancias")
+    print(f" dominios={'calculados (sound)' if calcular_dominios else 'omitidos (-inf,inf)'}"
+          f" | txt reescrito={'si' if exportar_texto else 'no'}"
+          f" | validacion={'si' if validar_todo else 'no'}")
+    print("=" * 72)
 
-    exitosos = 0
-    fallidos = 0
-
-    for ruta_instancia in archivos_txt:
-        nombre_base = os.path.splitext(os.path.basename(ruta_instancia))[0]
-        ruta_npz = os.path.join(carpeta_salida, f"{nombre_base}.npz")
-        ruta_txt_out = os.path.join(carpeta_salida, f"{nombre_base}_procesada.txt")
-        
-        print(f">>> Analizando instancia: {nombre_base}")
+    ok = fallidos = 0
+    for ruta in archivos:
+        base = os.path.splitext(os.path.basename(ruta))[0]
+        print(f"\n>>> {base}")
+        t0 = time.time()
         try:
-            procesar_instancia(ruta_instancia, ruta_npz, ruta_txt_out, calcular_dominios)
-            #validar_sistema(ruta_instancia, ruta_npz, verbose=False) 
-            exitosos += 1
+            inst, sis, dom = construir(ruta, calcular_dominios,
+                                       distribuir_sumas_escaladas)
+            exportar_npz(os.path.join(carpeta_salida, f"{base}.npz"), inst, sis, dom)
+            if exportar_texto:
+                exportar_txt(os.path.join(carpeta_salida, f"{base}_reescrita.txt"),
+                             inst, sis, dom)
+            print(f"    DAG     : {inst.dag.resumen()}")
+            print(f"    sistema : {sis.resumen()}")
+            print(f"    tiempo  : {time.time() - t0:.2f}s")
+            if validar_todo:
+                r = validar(inst, sis, dom, verbose=False)
+                for nombre, bien, det in r.checks:
+                    print(f"    [{'PASS' if bien else 'FAIL'}] {nombre}  {det}")
+                if not r.ok:
+                    raise RuntimeError("la auditoria fallo")
+            ok += 1
         except Exception as e:
-            print(f"  [X] ERROR CRÍTICO procesando {nombre_base}: {str(e)}")
             fallidos += 1
-        print("-" * 60)
-        
-    print("\n===========================================================")
-    print(f" RESUMEN: {exitosos} Exitosos | {fallidos} Fallidos")
-    print(f"===========================================================\n")
+            print(f"    [X] ERROR: {e}")
+            traceback.print_exc()
+
+    print("\n" + "=" * 72)
+    print(f" RESUMEN: {ok} exitosos | {fallidos} fallidos")
+    print("=" * 72)
+
 
 if __name__ == "__main__":
-    CARPETA_ENTRADA = 'instances' 
-    CARPETA_SALIDA = 'outputs'
-    
-    # OPCIÓN DEL PROFESOR: 
-    # False = [-1e8, 1e8] por defecto para V y W. 
-    # True = Calcula dominios matemáticos.
-    CALCULAR_DOMINIOS_OPCIONAL = False 
-    
-    procesar_carpeta(CARPETA_ENTRADA, CARPETA_SALIDA, CALCULAR_DOMINIOS_OPCIONAL)
+    procesar_carpeta('instances', 'outputs',
+                     calcular_dominios=True,
+                     exportar_texto=False,
+                     validar_todo=True)

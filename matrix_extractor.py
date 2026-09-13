@@ -1,100 +1,140 @@
+"""
+Capa 3: extraccion del subsistema lineal n-ario (Seccion 3.2 del paper).
+
+Cambios respecto de la version anterior:
+  D1  Se elimina por completo el mecanismo de variables auxiliares v_i.
+      Los productos, potencias y funciones son NODOS del DAG, es decir
+      COLUMNAS de A, tal como dice el paper.  Los coeficientes constantes
+      quedan dentro de A y no escondidos dentro de un v_i.
+  D2  Un nodo aparece en UNA sola columna: la separacion coeficiente/nodo la
+      hizo el DagBuilder, asi que x2^2, -x2^2 y 5*x2^2 comparten columna.
+  D5  Se exporta el sistema completo:  A*y + c = w , con los nombres y la
+      correspondencia fila <-> w, y ademas el subsistema de productos
+      (Proposicion 1) que antes no se emitia.
+  B6  A se conserva tambien en aritmetica exacta (Fraction) ademas del float.
+
+Forma del sistema (Fig. 3 del paper):
+
+        w_i  =  c_i + sum_j  A[i][j] * y_j          i = 0 .. m-1
+
+  - cada fila i corresponde a un nodo 'add' del DAG (una suma n-aria);
+  - las columnas y_j son nodos del DAG: variables, potencias, productos,
+    funciones, y tambien otros w_k (columnas mixtas, el y5=b5 de la Fig. 3);
+  - la matriz aumentada [A | -I] da el sistema homogeneo  [A|-I]*[y;w] = -c.
+"""
+
+from fractions import Fraction
+
 import numpy as np
-import sympy as sp
-from dag_builder import dag_nodes_cache, build_dag_node
 
-def extract_linear_system(constraints):
-    A_rows = []
-    b_vector = []
-    y_variables = {}
-    shell_equations = []
-    
-    sum_cache = {}
-    w_counter = 0
-    
-    v_cache = {}
-    v_equations = [] 
-    v_counter = 0
+from dag_builder import DagBuilder
 
-    def process_expr(expr):
-        nonlocal w_counter, v_counter
-        
-        if isinstance(expr, (sp.Symbol, sp.Number)):
-            return expr
-            
-        processed_args = [process_expr(arg) for arg in expr.args]
-        new_expr = expr.func(*processed_args) if processed_args else expr
-            
-        if isinstance(expr, sp.Mul):
-            # Modalidad Multiplicación N-Aria pedida por el profesor (ej. A * B * V_11)
-            vars_in_mul = [arg for arg in new_expr.args if arg.free_symbols]
-            is_n_ary_mult = len(vars_in_mul) > 1
-            
-            node = dag_nodes_cache.get(expr)
-            is_repeated = node and node.ref_count > 1
-            
-            # Englobamos si es un producto n-ario O si es una subexpresión repetida
-            if is_n_ary_mult or is_repeated:
-                if expr not in v_cache:
-                    v_sym = sp.Symbol(f'v_{v_counter}')
-                    v_counter += 1
-                    v_cache[expr] = v_sym
-                    v_equations.append((v_sym, new_expr))
-                return v_cache[expr]
-            return new_expr
-                
-        elif isinstance(expr, (sp.Pow, sp.Function)):
-            node = dag_nodes_cache.get(expr)
-            if node and node.ref_count > 1:
-                if expr not in v_cache:
-                    v_sym = sp.Symbol(f'v_{v_counter}')
-                    v_counter += 1
-                    v_cache[expr] = v_sym
-                    v_equations.append((v_sym, new_expr))
-                return v_cache[expr]
-            return new_expr
-                
-        elif isinstance(expr, sp.Add):
-            # Modalidad Sumas N-Arias -> Matriz Lineal Mixta
-            if expr not in sum_cache:
-                w_sym = sp.Symbol(f'w_{w_counter}')
-                w_counter += 1
-                row_dict = {}
-                constant_term = 0.0
-                
-                # Aquí v_1 y v_2 entran naturalmente a la matriz lineal
-                for term in new_expr.args:
-                    coeff, var_part = term.as_coeff_Mul()
-                    if var_part == 1:
-                        constant_term += float(coeff)
-                    else:
-                        if var_part not in y_variables:
-                            y_variables[var_part] = len(y_variables)
-                        col_index = y_variables[var_part]
-                        row_dict[col_index] = row_dict.get(col_index, 0.0) + float(coeff)
-                        
-                A_rows.append(row_dict)
-                b_vector.append(constant_term)
-                sum_cache[expr] = w_sym
-            return sum_cache[expr]
-        else:
-            return new_expr
 
-    for lhs_expr, op, rhs_val in constraints:
-        build_dag_node(lhs_expr)
-        
-    for lhs_expr, op, rhs_val in constraints:
-        shell_lhs = process_expr(lhs_expr)
-        shell_equations.append((shell_lhs, op, rhs_val))
+class SistemaLineal:
+    def __init__(self):
+        self.A = None              # np.ndarray float (m x n), redondeo al mas cercano
+        self.A_exacta = []         # [ {j: Fraction} ]  filas exactas
+        self.c = None              # np.ndarray float (m,)   termino constante
+        self.c_exacta = []
+        self.y_nodes = []
+        self.y_names = []
+        self.w_nodes = []
+        self.w_names = []
+        self.col_de_nodo = {}      # node.id -> j
+        self.fila_de_nodo = {}     # node.id -> i
+        self.subsistema_productos = []   # [(nombre, tipo, dato, [nombres operandos])]
+        self.restricciones = []          # [(nombre_raiz, op, rhs)]
+        self.var_names = []
 
-    num_rows = len(A_rows)
-    num_cols = len(y_variables)
-    A_matrix = np.zeros((num_rows, num_cols))
-    
-    for i, row_dict in enumerate(A_rows):
-        for j, coeff in row_dict.items():
-            A_matrix[i, j] = coeff
-            
-    y_names = np.array([str(expr) for expr, idx in sorted(y_variables.items(), key=lambda item: item[1])])
-    b_array = np.array(b_vector)
-    
-    return A_matrix, y_names, b_array, shell_equations, v_equations
+    # ---------------------------------------------------------------- info
+    def shape(self):
+        return self.A.shape
+
+    def aumentada(self):
+        """[A | -I] tal que  [A|-I] * [y ; w] = -c ."""
+        m, n = self.A.shape
+        M = np.zeros((m, n + m))
+        M[:, :n] = self.A
+        w_col = {nd.id: k for k, nd in enumerate(self.w_nodes)}
+        for k in range(m):
+            M[k, n + k] = -1.0
+        # si un w tambien es columna de y, la columna duplicada es intencional:
+        # el paper permite columnas mixtas.
+        return M, np.array([-v for v in self.c])
+
+    def resumen(self):
+        m, n = self.A.shape
+        densidad = float(np.count_nonzero(self.A)) / (m * n) if m * n else 0.0
+        coefs = self.A[self.A != 0]
+        return {
+            'filas_w': m, 'columnas_y': n,
+            'densidad': round(densidad, 4),
+            'coef_min': float(coefs.min()) if coefs.size else 0.0,
+            'coef_max': float(coefs.max()) if coefs.size else 0.0,
+            'variables_auxiliares_nuevas': 0,
+            'nodos_producto': len(self.subsistema_productos),
+        }
+
+
+def _nombre(nodo):
+    return nodo.to_str(usar_labels=True)
+
+
+def extraer_sistema_lineal(dag: DagBuilder):
+    """Construye A, c, y, w a partir del DAG ya normalizado."""
+    sis = SistemaLineal()
+
+    # 1. una fila por cada nodo 'add' (suma n-aria).  Etiqueta w_i.
+    for nodo in dag.nodes:
+        if nodo.kind == 'add':
+            nodo.label = f"w_{len(sis.w_nodes)}"
+            sis.fila_de_nodo[nodo.id] = len(sis.w_nodes)
+            sis.w_nodes.append(nodo)
+            sis.w_names.append(nodo.label)
+
+    # 2. columnas: todo nodo que aparece como sumando de alguna fila
+    def columna(nodo):
+        j = sis.col_de_nodo.get(nodo.id)
+        if j is None:
+            j = len(sis.y_nodes)
+            sis.col_de_nodo[nodo.id] = j
+            sis.y_nodes.append(nodo)
+            sis.y_names.append(_nombre(nodo))
+        return j
+
+    for nodo in sis.w_nodes:
+        const, coefs = nodo.data
+        fila = {}
+        for coef, hijo in zip(coefs, nodo.args):
+            j = columna(hijo)
+            fila[j] = fila.get(j, Fraction(0)) + coef   # "coefficients are summed up"
+        sis.A_exacta.append(fila)
+        sis.c_exacta.append(const)
+
+    # 3. version numerica
+    m, n = len(sis.w_nodes), len(sis.y_nodes)
+    A = np.zeros((m, n))
+    for i, fila in enumerate(sis.A_exacta):
+        for j, q in fila.items():
+            A[i, j] = float(q)
+    sis.A = A
+    sis.c = np.array([float(q) for q in sis.c_exacta])
+
+    # 4. subsistema de productos / potencias / funciones (Proposicion 1)
+    for nodo in dag.nodes:
+        if nodo.kind in ('mul', 'pow', 'func'):
+            operandos = [_nombre(a) for a in nodo.args]
+            dato = (str(nodo.data) if nodo.kind == 'func'
+                    else (str(nodo.data) if nodo.kind == 'pow' else ''))
+            sis.subsistema_productos.append((_nombre(nodo), nodo.kind, dato, operandos))
+
+    sis.var_names = [nd.data for nd in dag.nodes if nd.kind == 'var']
+    return sis
+
+
+def registrar_restricciones(sis, raices, ops, rhs_vals):
+    """Las 'ecuaciones cascaron': cada restriccion original queda como
+    <nombre del nodo raiz> <op> <constante>, sin tocar el sistema original."""
+    for nodo, op, rhs in zip(raices, ops, rhs_vals):
+        sis.restricciones.append((_nombre(nodo), op, float(rhs)))
+    return sis
