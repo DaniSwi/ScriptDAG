@@ -24,36 +24,43 @@ def propagar_dominios(dag, var_domains):
     """
     dom = {}
     for nodo in dag.nodes:
-        k = nodo.kind
-        if k == 'var':
+        if nodo.kind == 'var':
             dom[nodo.id] = tuple(var_domains.get(nodo.data, iv.ENTERO))
-        elif k == 'const':
-            dom[nodo.id] = iv.from_fraction(nodo.data)
-        elif k == 'add':
-            const, coefs = nodo.data
-            acum = iv.from_fraction(const)
-            for c, hijo in zip(coefs, nodo.args):
-                acum = iv.suma(acum, iv.mult(iv.from_fraction(c), dom[hijo.id]))
-            dom[nodo.id] = acum
-        elif k == 'mul':
-            acum = (1.0, 1.0)
-            for hijo in nodo.args:
-                acum = iv.mult(acum, dom[hijo.id])
-            dom[nodo.id] = acum
-        elif k == 'pow':
-            e = Fraction(nodo.data)
-            base = dom[nodo.args[0].id]
-            if e.denominator == 1:
-                dom[nodo.id] = iv.potencia_entera(base, int(e))
-            elif base[0] >= 0:
-                dom[nodo.id] = iv.funcion('sqrt', [base]) if e == Fraction(1, 2) else iv.ENTERO
-            else:
-                dom[nodo.id] = iv.ENTERO
-        elif k == 'func':
-            dom[nodo.id] = iv.funcion(nodo.data, [dom[a.id] for a in nodo.args])
         else:
-            dom[nodo.id] = iv.ENTERO
+            dom[nodo.id] = evaluar_nodo(nodo, dom)
     return dom
+
+
+def evaluar_nodo(nodo, dom):
+    """Fase forward de UN nodo: su intervalo a partir de los dominios de sus
+    hijos.  La usan propagar_dominios y el HC4-revise de nsc.py."""
+    k = nodo.kind
+    if k == 'var':
+        return dom[nodo.id]
+    if k == 'const':
+        return iv.from_fraction(nodo.data)
+    if k == 'add':
+        const, coefs = nodo.data
+        acum = iv.from_fraction(const)
+        for c, hijo in zip(coefs, nodo.args):
+            acum = iv.suma(acum, iv.mult(iv.from_fraction(c), dom[hijo.id]))
+        return acum
+    if k == 'mul':
+        acum = (1.0, 1.0)
+        for hijo in nodo.args:
+            acum = iv.mult(acum, dom[hijo.id])
+        return acum
+    if k == 'pow':
+        e = Fraction(nodo.data)
+        base = dom[nodo.args[0].id]
+        if e.denominator == 1:
+            return iv.potencia_entera(base, int(e))
+        if base[0] >= 0:
+            return iv.funcion('sqrt', [base]) if e == Fraction(1, 2) else iv.ENTERO
+        return iv.ENTERO
+    if k == 'func':
+        return iv.funcion(nodo.data, [dom[a.id] for a in nodo.args])
+    return iv.ENTERO
 
 
 def evaluar_en_punto(dag, punto):
