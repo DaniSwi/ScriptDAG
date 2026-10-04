@@ -25,7 +25,15 @@ Contenido del .npz
   var_names, var_lo, var_hi     variables ORIGINALES del problema
   prod_nombre/tipo/dato/args    subsistema no lineal (Proposicion 1)
   restricciones                 'nodo op rhs' (ecuaciones cascaron)
+  P_fila/col/num/den            conditioner de Gauss-Jordan (Sec. 3.3.2), exacto
+  PA_fila/col/num/den           P*A exacto; columnas de P = filas de A (las w)
+  PA_pivote                     columna del pivote de cada fila de PA, o -1
+                                si la fila es dependiente (PA[r] = 0)
   meta_*                        conteos para auditoria
+
+P y PA se calculan aqui porque A es estatica: el paper los calcula una sola
+vez, en el preprocesamiento.  Filas de P/PA: primero las de pivote (en orden
+de pivote), despues las dependientes.
 """
 
 import numpy as np
@@ -33,6 +41,7 @@ import numpy as np
 import dominios
 import intervals as iv
 from matrix_extractor import extraer_sistema_lineal, registrar_restricciones
+from nsc import conditioner_de
 from parser_instancias import parse_instance
 
 
@@ -65,6 +74,10 @@ def exportar_npz(ruta_npz, inst, sis, dom):
     var_lo = np.array([inst.var_domains[v][0] for v in inst.var_names], dtype=float)
     var_hi = np.array([inst.var_domains[v][1] for v in inst.var_names], dtype=float)
     A_aug, rhs_aug = sis.aumentada()
+    cond = conditioner_de(sis)
+    orden = cond.filas + cond.dependientes
+    P_coo, PA_coo = _coo([cond.P[r] for r in orden]), _coo([cond.PA[r] for r in orden])
+    pivote_de = dict(cond.pivotes)
 
     np.savez(
         ruta_npz,
@@ -85,7 +98,21 @@ def exportar_npz(ruta_npz, inst, sis, dom):
         meta_lineas_restriccion=np.int64(inst.lineas_restriccion),
         meta_n_nodos=np.int64(len(inst.dag.nodes)),
         meta_aux_nuevas=np.int64(0),
+        P_fila=P_coo[0], P_col=P_coo[1], P_num=P_coo[2], P_den=P_coo[3],
+        PA_fila=PA_coo[0], PA_col=PA_coo[1], PA_num=PA_coo[2], PA_den=PA_coo[3],
+        PA_pivote=np.array([pivote_de.get(r, -1) for r in orden], dtype=np.int64),
     )
+
+
+def _coo(filas_dispersas):
+    """[{col: Fraction}] -> (fila, col, numerador, denominador) como arreglos."""
+    f, c, n, d = [], [], [], []
+    for i, fila in enumerate(filas_dispersas):
+        for j, q in sorted(fila.items()):
+            f.append(i); c.append(j)
+            n.append(str(q.numerator)); d.append(str(q.denominator))
+    return (np.array(f, dtype=np.int64), np.array(c, dtype=np.int64),
+            np.array(n), np.array(d))
 
 
 def exportar_txt(ruta_txt, inst, sis, dom):

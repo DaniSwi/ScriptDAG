@@ -4,6 +4,7 @@ Punto de entrada.  Uso:
     python main.py instances/inst001.txt            # una instancia
     python main.py instances/inst001.txt --txt      # ademas el .txt reescrito
     python main.py --lote                           # toda la carpeta instances/
+    python main.py --lote --nsc                     # ademas REF vs NSC (Sec. 3.3)
 
 Se elimino la funcion asd(), que estaba rota (B4: desempaquetaba 2 y 4 valores
 de funciones que devuelven 3 y 5) y era codigo muerto.
@@ -22,12 +23,13 @@ import os
 import sys
 
 from batch_processor import procesar_carpeta
+from nsc import comparar
 from exportator import construir, exportar_npz, exportar_txt
 from validator import validar
 
 
 def procesar_uno(ruta, carpeta_salida='outputs', exportar_texto=False,
-                 calcular_dominios=True):
+                 calcular_dominios=True, correr_nsc=False):
     os.makedirs(carpeta_salida, exist_ok=True)
     base = os.path.splitext(os.path.basename(ruta))[0]
     print(f"--- Pre-procesamiento de {ruta} ---")
@@ -43,6 +45,8 @@ def procesar_uno(ruta, carpeta_salida='outputs', exportar_texto=False,
         exportar_txt(txt, inst, sis, dom)
         print(f"  escrito  : {txt}")
     validar(inst, sis, dom)
+    if correr_nsc:
+        comparar(inst, sis)
     return inst, sis, dom
 
 
@@ -53,8 +57,10 @@ if __name__ == "__main__":
         procesar_carpeta('instances', 'outputs',
                          calcular_dominios='--sin-dominios' not in flags,
                          exportar_texto='--txt' in flags,
-                         validar_todo='--sin-validar' not in flags)
+                         validar_todo='--sin-validar' not in flags,
+                         correr_nsc='--nsc' in flags)
     else:
         for ruta in args:
             procesar_uno(ruta, exportar_texto='--txt' in flags,
-                         calcular_dominios='--sin-dominios' not in flags)
+                         calcular_dominios='--sin-dominios' not in flags,
+                         correr_nsc='--nsc' in flags)

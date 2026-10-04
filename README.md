@@ -1,19 +1,20 @@
 # ScriptDAG: identificación de subsistemas n-arios en NCSP
 
-Preprocesador para problemas de satisfacción de restricciones numéricas (NCSP) que
-implementa las Secciones 3.1–3.2 de:
+Preprocesador y contractor para problemas de satisfacción de restricciones numéricas
+(NCSP) que implementa la Sección 3 de:
 
 > Araya, I. & Reyes, V. (2019). *Enhancing interval constraint propagation by
 > identifying and filtering n-ary subsystems.*
 
 Lee instancias `.txt` en formato tipo Minibex, construye un DAG que fusiona las
 subexpresiones comunes, identifica las sumas n-arias y extrae el subsistema lineal
-asociado, junto con dominios sound para cada nodo.
+asociado, junto con dominios sound para cada nodo (Secciones 3.1–3.2). Encima de eso,
+`nsc.py` implementa el contractor **NSC** de la Sección 3.3.
 
-**Alcance.** El proyecto cubre solo el preprocesamiento. La Sección 3.3 (filtrado
-NSC: conditioner por Gauss–Jordan, HC4-revise, iteración a punto fijo) **todavía no
-está implementada**. El `.npz` de salida contiene todo lo que hace falta para
-construirla encima.
+**Alcance.** El proyecto implementa el NSC basado en el conditioner de Gauss–Jordan
+(§3.3.2). La variante con simplex (§3.3.1) no está implementada, porque necesita un
+LP solver con cotas certificadas. Tampoco hay un solver branch & bound: NSC contrae
+una caja, pero no bisecta.
 
 ---
 
@@ -64,16 +65,29 @@ abajo):
 python main.py instances/inst001.txt --txt
 ```
 
+Para comparar además, en cada instancia, cuánto contraen HC4 sobre el DAG (REF) y
+NSC partiendo de la caja inicial:
+
+```bash
+python main.py --lote --nsc
+```
+
 Para la regresión contra el ejemplo (1) del paper:
 
 ```bash
 python test_paper.py
 ```
 
+Para las pruebas del contractor NSC:
+
+```bash
+python test_nsc.py
+```
+
 Otras opciones: `--sin-dominios` y `--sin-validar`.
 
 **Qué deberías ver:** `main.py --lote` imprime `3 exitosos | 0 fallidos`, con 21
-`[PASS]` y ningún `[FAIL]`. `test_paper.py` termina en `Todo OK.`
+`[PASS]` y ningún `[FAIL]`. `test_paper.py` y `test_nsc.py` terminan en `Todo OK.`
 
 ## El sistema extraído
 
@@ -98,6 +112,47 @@ Los coeficientes se calculan en aritmética exacta (`Fraction`). Los dominios so
 sobre-aproximaciones sound, con redondeo dirigido hacia afuera. Cuando un nodo no se
 puede acotar, su dominio es `(-inf, +inf)`.
 
+## El contractor NSC (Sección 3.3)
+
+`nsc.contraer` repite hasta punto fijo:
+
+1. **HC4-revise sobre el DAG**: una fase forward y una backward sobre todos los
+   nodos. Los dominios de los nodos intermedios persisten entre pasadas, así que un
+   nodo compartido conserva la información de proyección que reciba desde cualquiera
+   de sus padres.
+2. **Proyección sobre `PA·y = P·(w − c)`**: cada fila se trata como una restricción
+   lineal y se proyecta sobre sus `y`. `P` es el conditioner de Gauss–Jordan con
+   pivote de máxima magnitud por columna, calculado una sola vez en racionales
+   exactos.
+
+Toda la aritmética es de intervalos, con redondeo hacia afuera. Una intersección
+vacía significa que la caja no tiene soluciones.
+
+```python
+from exportator import construir
+from nsc import Preparado, conditioner_de, contraer
+inst, sis, _ = construir('instances/inst001.txt')
+dom, iteraciones = contraer(Preparado(inst, sis, conditioner_de(sis)))
+```
+
+`test_nsc.py` comprueba tres cosas:
+- Con la matriz del paper, el conditioner reproduce exactamente la `P` y la `PA` de
+  la §3.3.2, incluida la fila dependiente con −1/6.
+- `P·A = PA` en racionales para cada instancia.
+- Soundness: se toma un punto, se encierran con intervalos los valores de las raíces
+  en ese punto y se usan como lados derechos, de modo que el punto es una solución
+  real del sistema. Ni REF ni NSC pueden eliminarlo.
+
+Esta prueba detecta errores plantados, como usar `a` en lugar de `1/a`, dividir de
+forma ingenua por un intervalo que contiene 0 u olvidar la rama negativa de una raíz
+par.
+
+**Qué tanto contrae.** En el ejemplo (1) del paper (dominios `[-1, 5]`), REF reduce
+el volumen de la caja en 10^0.15 y NSC en 10^1.36. En las tres instancias de
+`instances/`, partiendo de la caja inicial, NSC y REF contraen lo mismo. La
+ganancia que reporta el paper se mide durante el branch & bound, en cajas más
+pequeñas, y ese solver no está en el repo.
+
 ## Arquitectura
 
 ```
@@ -108,9 +163,11 @@ matrix_extractor.py    DAG -> SistemaLineal (A exacta, c, y, w, subsistema de pr
   dominios.py          propagacion de dominios por el DAG + muestreadores
 exportator.py          pipeline completo; exportar_npz / exportar_txt
 validator.py           auditoria (V1-V5)
+nsc.py                 contractor NSC (Sec. 3.3): conditioner, HC4-revise, punto fijo
 batch_processor.py     recorre una carpeta
 main.py                CLI
 test_paper.py          regresion sobre el ejemplo (1) del paper
+test_nsc.py            conditioner del paper, P*A = PA, soundness de NSC
 ```
 
 El parseo usa el módulo `ast` de Python con un recorrido iterativo. No usa SymPy,
@@ -155,6 +212,9 @@ w_es_columna               indice de columna de cada w, o -1
 var_names, var_lo, var_hi  variables ORIGINALES del problema
 prod_nombre/tipo/dato/args subsistema no lineal (Proposicion 1)
 restricciones              ecuaciones cascaron, 'nodo op rhs'
+P_fila/P_col/P_num/P_den   conditioner P exacto (columnas = filas de A)
+PA_fila/.../PA_den         P·A exacto
+PA_pivote                  columna del pivote de cada fila de PA, o -1 si es dependiente
 meta_*                     conteos para auditoria
 ```
 
@@ -169,6 +229,7 @@ solo por conveniencia.
   línea no se puede parsear, el parser levanta `ParseError` en vez de saltársela.
 - `abs`, `min` y `max` se parsean, pero su dominio queda en `(-inf, inf)`: es sound,
   pero no sirve para filtrar.
-- Si el coeficiente de la raíz no es 1, el `rhs` se divide en float. Los literales
+- Si el coeficiente de la raíz no es 1, el `rhs` se divide en float. NSC lo
+  compensa ensanchando ese valor 2 ulps. Los literales
   decimales se interpretan como el racional escrito (`0.1` → `1/10`).
 - Solo hay 3 instancias de prueba, y `inst001`/`inst002` vienen del mismo generador.

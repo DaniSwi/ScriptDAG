@@ -71,6 +71,18 @@ def suma(I, J):
     return (dn(I[0] + J[0]), up(I[1] + J[1]))
 
 
+def resta(I, J):
+    return (dn(I[0] - J[1]), up(I[1] - J[0]))
+
+
+def interseccion(I, J):
+    """I inter J, o None si es vacia (la caja no tiene soluciones)."""
+    lo, hi = max(I[0], J[0]), min(I[1], J[1])
+    if lo > hi or lo != lo or hi != hi:
+        return None
+    return (lo, hi)
+
+
 def suma_escalar(I, c):
     return (dn(I[0] + c), up(I[1] + c))
 
