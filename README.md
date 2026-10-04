@@ -18,76 +18,166 @@ una caja, pero no bisecta.
 
 ---
 
-## Instalación
+## Paso a paso
 
-Necesitas **Python ≥ 3.9** (por `math.nextafter`) y **numpy**. Ninguna otra
-dependencia.
+Todos los comandos se ejecutan desde la carpeta raíz del repo (la que contiene
+`main.py`).
+
+### 1. Requisitos
+
+- **Python 3.9 o superior.** Para ver tu versión, ejecuta `python --version`. En
+  Windows, si `python` no existe, prueba con `py --version` y usa `py` en lugar de
+  `python` en todos los comandos.
+- **git**, para clonar el repo. También puedes descargarlo como ZIP desde GitHub.
+
+### 2. Descargar el repo
+
+```bash
+git clone https://github.com/DaniSwi/ScriptDAG.git
+```
+
+```bash
+cd ScriptDAG
+```
+
+### 3. Crear el entorno virtual e instalar numpy
+
+Este paso se hace una sola vez. Primero crea el entorno:
 
 ```bash
 python -m venv .venv
 ```
 
-Activa el entorno según tu shell:
+Después actívalo; el comando depende de tu terminal.
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
+- **Windows, PowerShell:**
 
-```bash
-source .venv/bin/activate
-```
+  ```powershell
+  .\.venv\Scripts\Activate.ps1
+  ```
 
-Y luego instala numpy:
+  Si aparece un error de *"ejecución de scripts deshabilitada"*, usa CMD o la opción
+  sin activar que se explica más abajo.
+
+- **Windows, CMD:**
+
+  ```bat
+  .venv\Scripts\activate.bat
+  ```
+
+- **macOS / Linux:**
+
+  ```bash
+  source .venv/bin/activate
+  ```
+
+Con el entorno activo, el prompt empieza con `(.venv)`. Entonces instala numpy, que es
+la única dependencia:
 
 ```bash
 pip install numpy
 ```
 
-## Uso
+**Sin activar el entorno:** puedes llamar directamente al Python del entorno, por
+ejemplo `.venv\Scripts\python main.py --lote` en Windows o
+`.venv/bin/python main.py --lote` en macOS/Linux.
 
-Para procesar todas las instancias de `instances/` y escribir los resultados en
-`outputs/` (incluye la auditoría):
+Cada vez que abras una terminal nueva, vuelve a activar el entorno; no hace falta
+reinstalar.
 
-```bash
-python main.py --lote
-```
-
-Para procesar una sola instancia:
-
-```bash
-python main.py instances/inst001.txt
-```
-
-Si además quieres el `.txt` reescrito con variables auxiliares (opcional, ver más
-abajo):
-
-```bash
-python main.py instances/inst001.txt --txt
-```
-
-Para comparar además, en cada instancia, cuánto contraen HC4 sobre el DAG (REF) y
-NSC partiendo de la caja inicial:
-
-```bash
-python main.py --lote --nsc
-```
-
-Para la regresión contra el ejemplo (1) del paper:
+### 4. Comprobar que todo funciona
 
 ```bash
 python test_paper.py
 ```
 
-Para las pruebas del contractor NSC:
-
 ```bash
 python test_nsc.py
 ```
 
-Otras opciones: `--sin-dominios` y `--sin-validar`.
+Los dos deben terminar en `Todo OK.` (`test_nsc.py` tarda unos segundos).
 
-**Qué deberías ver:** `main.py --lote` imprime `3 exitosos | 0 fallidos`, con 21
-`[PASS]` y ningún `[FAIL]`. `test_paper.py` y `test_nsc.py` terminan en `Todo OK.`
+### 5. Procesar las instancias incluidas
+
+```bash
+python main.py --lote
+```
+
+Este comando procesa todos los `.txt` de `instances/` y escribe un `.npz` por instancia
+en `outputs/`. Además, audita cada una. Al final debe mostrar
+`RESUMEN: 3 exitosos | 0 fallidos`.
+
+### 6. Procesar una sola instancia
+
+Esta es la salida real con `inst001`; la línea `escrito` indica dónde quedó el
+resultado:
+
+```
+python main.py instances/inst001.txt
+
+--- Pre-procesamiento de instances/inst001.txt ---
+  DAG      : {'nodos': 33, ..., 'compartidos_CSE': 19}
+  sistema  : {'filas_w': 10, 'columnas_y': 12, ..., 'variables_auxiliares_nuevas': 0}
+  A        : 10 filas (w) x 12 columnas (y)
+  escrito  : outputs/inst001.npz
+--- AUDITORIA instances/inst001.txt ---
+  [PASS] V1 conteo de restricciones  archivo=8  parseadas=8
+  ...
+  => TODO OK
+```
+
+### 7. Comparar HC4 contra NSC (opcional)
+
+Agrega `--nsc` a cualquiera de los comandos anteriores. Para cada instancia, imprime
+cuánto contrae la caja inicial HC4 sobre el DAG (REF) y cuánto NSC:
+
+```bash
+python main.py instances/inst001.txt --nsc
+```
+
+```
+  REF (HC4 en el DAG) : 4/8 variables contraidas, reduccion de volumen 10^9.42, 112 iter, 0.08s
+  NSC                 : 4/8 variables contraidas, reduccion de volumen 10^9.42, 112 iter, 0.11s
+```
+
+### Todas las opciones
+
+| Opción | Qué hace |
+|---|---|
+| `--lote` | Procesa toda la carpeta `instances/` (es lo que pasa si no se da ningún archivo). |
+| `--nsc` | Compara además REF contra NSC. |
+| `--txt` | Escribe también `outputs/<nombre>_reescrita.txt`, el sistema reescrito con variables auxiliares (estilo Ceberio). |
+| `--sin-dominios` | No calcula dominios; todos quedan en `(-inf, inf)`. |
+| `--sin-validar` | Omite la auditoría (solo junto con `--lote`). |
+
+## Usar tus propias instancias
+
+Copia tu archivo `.txt` a `instances/` y ejecuta `python main.py --lote`. También puedes
+procesarlo directamente con `python main.py ruta/a/tu_instancia.txt`. El formato es el
+siguiente:
+
+```
+// los comentarios empiezan con // o #
+Variables
+x1 in [-1, 5];
+x2 in [-1e8, 1e8];
+Constraints
+5*x2 + x1*x2 - x2 = 3;
+2*x2*sin(x1 + x2) + x1^2 <= 2;
+exp(x1) - 1/x2 = 0;
+end
+```
+
+- Una variable por línea: `nombre in [inferior, superior];`.
+- Una restricción por línea, terminada en `;`, con `=`, `<=`, `>=`, `<` o `>`.
+- Operadores `+ - * / ^`. Funciones: `sin`, `cos`, `exp`, `log`, `sqrt`, `atan`,
+  `tanh`, `Abs`.
+- Las líneas `minimize ...` o `maximize ...` se ignoran.
+
+**Todavía no se soporta:** la sección `constants`, la sección `function`, arreglos de
+variables (`x[3]`), desigualdades dobles (`-1 <= x^2 <= 4`) ni restricciones que
+ocupen varias líneas. Si el archivo trae alguna de estas, el programa se detiene con un
+`ParseError` que indica el archivo y la línea; nunca la ignora en silencio.
 
 ## El sistema extraído
 
