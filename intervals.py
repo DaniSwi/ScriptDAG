@@ -6,6 +6,17 @@ Arregla los bugs B1, B2 y B6 de la revision:
       devolvian intervalos que NO contienen la expresion (eliminaban soluciones).
   B2  los dominios de w_i/v_i se truncaban a [-1e8, 1e8].
   B6  toda la aritmetica usaba float sin redondeo dirigido.
+  B8  sin/cos devolvian siempre [-1, 1] (sound pero ciego): una caja diminuta
+      que no cumple la restriccion nunca se descartaba.  Ahora se evaluan los
+      extremos y se incluyen los maximos/minimos que caen dentro.
+  B9  exp de un argumento >= 709 (desborde) y log y sqrt de un argumento sin
+      parte valida (<= 0 y < 0) devolvian
+      (-inf, inf): sound, pero NO isotono (una sub-caja daba un intervalo mas
+      grande que la caja; lo detecto V4b en instancias del generador).  Ahora
+      exp devuelve (mayor float, inf), y log y sqrt el limite de su dominio,
+      (-inf, -inf) y (0, 0): ahi no hay soluciones, asi que cualquier valor es
+      sound, y estos preservan la isotonia.  Con un lado derecho finito, (-inf, -inf) intersecta en vacio y
+      la caja se descarta, que es lo correcto.
 
 Convencion: un intervalo es una tupla (lo, hi) de floats con lo <= hi.
 Se permiten -inf / +inf.  Nunca se devuelve un intervalo que no contenga
@@ -14,6 +25,7 @@ devuelve (-inf, +inf), que es sound aunque no filtre.
 """
 
 import math
+import sys
 from fractions import Fraction
 
 INF = math.inf
@@ -159,17 +171,56 @@ def potencia(I, J):
     return ENTERO
 
 
-_SIEMPRE_ACOTADAS = {'sin': (-1.0, 1.0), 'cos': (-1.0, 1.0)}
+_DOS_PI = 2.0 * math.pi
+_TRIG_SEGURO = 1e6      # mas alla, no se confia en la reduccion de argumento
+
+
+def _contiene_fase(a, b, fase):
+    """Hay algun k con a <= fase + 2*k*pi <= b?  Con tolerancia a favor de
+    responder 'si' (incluir un extremo de mas solo ensancha: sound)."""
+    tol = 1e-9 * max(1.0, abs(a), abs(b))
+    k = math.ceil((a - tol - fase) / _DOS_PI)
+    return fase + k * _DOS_PI <= b + tol
+
+
+def _trig(I, f, fase_max):
+    """Envoltura de f = sin o cos sobre I.  f alcanza +1 en fase_max + 2k*pi y
+    -1 en fase_max + pi + 2k*pi.
+
+    Antes sin/cos devolvian SIEMPRE [-1, 1]: sound pero ciego, y una caja de
+    ancho 1e-8 que no cumple sin(x) = c nunca se podia descartar (lo destapo
+    el branch & bound de bb.py sobre el ejemplo (1) del paper)."""
+    a, b = I
+    if not (math.isfinite(a) and math.isfinite(b)) or b - a >= _DOS_PI \
+            or max(abs(a), abs(b)) > _TRIG_SEGURO:
+        return (-1.0, 1.0)
+    fa, fb = f(a), f(b)
+    lo, hi = min(fa, fb), max(fa, fb)
+    # libm no garantiza redondeo correcto: margen holgado hacia afuera
+    lo, hi = dn(dn(lo)) - 1e-15, up(up(hi)) + 1e-15
+    if _contiene_fase(a, b, fase_max):
+        hi = 1.0
+    if _contiene_fase(a, b, fase_max + math.pi):
+        lo = -1.0
+    return (max(lo, -1.0), min(hi, 1.0))
 
 
 def funcion(nombre, args):
     """Evaluacion por intervalos de funciones elementales.  Sound por defecto."""
-    if nombre in _SIEMPRE_ACOTADAS:
-        return _SIEMPRE_ACOTADAS[nombre]
+    if nombre == 'sin' and args:
+        return _trig(args[0], math.sin, math.pi / 2)
+    if nombre == 'cos' and args:
+        return _trig(args[0], math.cos, 0.0)
+    if nombre in ('sin', 'cos'):
+        return (-1.0, 1.0)
     I = args[0] if args else ENTERO
     a, b = I
     try:
         if nombre == 'exp':
+            # B9: con a >= 709, exp(a) desborda; la cota inferior es el
+            # mayor float, no (-inf, inf) (eso rompia la isotonia)
+            if a >= 709:
+                return (sys.float_info.max, INF)
             return (dn(math.exp(a)) if a > -745 else 0.0,
                     up(math.exp(b)) if b < 709 else INF)
         if nombre == 'Abs':
@@ -178,12 +229,12 @@ def funcion(nombre, args):
             return (dn(min(abs(a), abs(b))), up(max(abs(a), abs(b))))
         if nombre == 'sqrt':
             if b < 0.0:
-                return ENTERO                 # sin parte real
+                return (0.0, 0.0)             # B9: sin parte real
             lo = math.sqrt(max(a, 0.0))
             return (dn(lo), up(math.sqrt(b)) if math.isfinite(b) else INF)
         if nombre == 'log':
             if b <= 0.0:
-                return ENTERO
+                return (NEG_INF, NEG_INF)     # B9: sin parte real
             lo = NEG_INF if a <= 0.0 else dn(math.log(a))
             return (lo, up(math.log(b)) if math.isfinite(b) else INF)
         if nombre == 'atan':

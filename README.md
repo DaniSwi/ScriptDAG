@@ -12,9 +12,11 @@ asociado, junto con dominios sound para cada nodo (Secciones 3.1–3.2). Encima 
 `nsc.py` implementa el contractor **NSC** de la Sección 3.3.
 
 **Alcance.** El proyecto implementa el NSC basado en el conditioner de Gauss–Jordan
-(§3.3.2). La variante con simplex (§3.3.1) no está implementada, porque necesita un
-LP solver con cotas certificadas. Tampoco hay un solver branch & bound: NSC contrae
-una caja, pero no bisecta.
+(§3.3.2) y un branch & bound por intervalos (`bb.py`) para medirlo como en el paper:
+cuántas cajas y cuánto tiempo necesita cada estrategia. La variante con simplex
+(§3.3.1) no está implementada, porque necesita un LP solver con cotas certificadas.
+El solver es Python puro, así que no alcanza a resolver sistemas del tamaño de
+`inst001` en un tiempo razonable (ver *Limitaciones*).
 
 ---
 
@@ -95,7 +97,12 @@ python test_paper.py
 python test_nsc.py
 ```
 
-Los dos deben terminar en `Todo OK.` (`test_nsc.py` tarda unos segundos).
+```bash
+python test_bb.py
+```
+
+Los tres deben terminar en `Todo OK.` `test_nsc.py` tarda unos segundos y
+`test_bb.py`, unos 15 segundos.
 
 ### 5. Procesar las instancias incluidas
 
@@ -140,12 +147,58 @@ python main.py instances/inst001.txt --nsc
   NSC                 : 4/8 variables contraidas, reduccion de volumen 10^9.42, 112 iter, 0.11s
 ```
 
+### 8. Resolver con branch & bound (opcional)
+
+Agrega `--bb` para resolver el sistema completo dos veces, primero con REF y después
+con NSC. Imprime cuántas cajas y cuánto tiempo usó cada estrategia, y la ganancia
+`gt` (tiempo) y `gb` (cajas) definida igual que en la Tabla 1 del paper. Con el
+ejemplo (1) del paper:
+
+```
+  REF :     203 cajas,    2 cajas solucion (2 certificadas),     0.35s  [completo]
+  NSC :      45 cajas,    2 cajas solucion (2 certificadas),     0.17s  [completo]
+  ganancia NSC vs REF: gt = 2.13  gb = 4.51
+```
+
+Cada estrategia tiene un límite de 600 s y de 100 000 cajas. Si se alcanza, la línea
+dice `TRUNCADO` y no se calcula la ganancia, porque un árbol incompleto no permite
+comparar. Con las instancias incluidas pasa eso: son de 8 variables con dominios
+`[-1e8, 1e8]` y el árbol no termina.
+
+### 9. Reproducir el experimento de la Sección 4.2 (opcional)
+
+`experimento.py` genera instancias aleatorias con la misma estructura que las del
+paper, las resuelve con REF y NSC, y resume la ganancia relativa promedio de NSC
+(Definición 3 del paper) para cada número de sumas P:
+
+```bash
+python experimento.py --tipo mult
+```
+
+```bash
+python experimento.py --tipo func
+```
+
+`mult` corresponde a las ecuaciones (6) del paper (productos de sumas, Fig. 6) y
+`func` a las (7) (sumas de funciones de sumas, Fig. 7). Por defecto usa los mismos
+parámetros del paper (n = 8, Q = 100, P de 8 a 16, 20 instancias por P) salvo los
+dominios, que son `[-2, 2]` en lugar de `[-1e8, 1e8]`. Con todo por defecto tarda
+horas; para una prueba rápida:
+
+```bash
+python experimento.py --tipo mult --P 8 10 --instancias 3 --limite 60
+```
+
+Los resultados quedan en `experimentos/resultados_<tipo>.csv`, y las instancias
+generadas, en `experimentos/instancias/`.
+
 ### Todas las opciones
 
 | Opción | Qué hace |
 |---|---|
 | `--lote` | Procesa toda la carpeta `instances/` (es lo que pasa si no se da ningún archivo). |
-| `--nsc` | Compara además REF contra NSC. |
+| `--nsc` | Compara además cuánto contraen REF y NSC la caja inicial. |
+| `--bb` | Resuelve con branch & bound usando REF y NSC, y compara cajas y tiempo. |
 | `--txt` | Escribe también `outputs/<nombre>_reescrita.txt`, el sistema reescrito con variables auxiliares (estilo Ceberio). |
 | `--sin-dominios` | No calcula dominios; todos quedan en `(-inf, inf)`. |
 | `--sin-validar` | Omite la auditoría (solo junto con `--lote`). |
@@ -241,7 +294,93 @@ par.
 el volumen de la caja en 10^0.15 y NSC en 10^1.36. En las tres instancias de
 `instances/`, partiendo de la caja inicial, NSC y REF contraen lo mismo. La
 ganancia que reporta el paper se mide durante el branch & bound, en cajas más
-pequeñas, y ese solver no está en el repo.
+pequeñas; ver la sección siguiente.
+
+## El branch & bound (`bb.py`)
+
+`bb.resolver` explora el árbol en profundidad. En cada caja:
+- la contrae con REF o con NSC;
+- si queda vacía, la descarta;
+- si todas las variables miden menos que `eps` (1e-8 por defecto), la guarda como
+  caja solución;
+- si no, la bisecta por la mitad, en la variable que elige SmearSumRel (el
+  bisector del paper).
+
+Después de contraer con REF o NSC se aplica un **Newton intervalar** (`newton.py`,
+Hansen–Sengupta), igual para las dos estrategias, como hace Ibex en el paper. Newton
+además **certifica** las cajas solución: una caja certificada contiene exactamente
+una solución. Newton solo se aplica a sistemas cuadrados de igualdades. Las
+decisiones que el paper deja a Ibex están documentadas como S1–S7 en `bb.py` y
+T1–T5 en `newton.py`.
+
+**Resultados.** En el ejemplo (1) del paper, REF necesita 203 cajas y NSC 45
+(`gb = 4.5`, `gt = 2.1`). Ambos encuentran las mismas 2 soluciones, y las dos quedan
+certificadas. El paper reporta 83 cajas para HC4 sobre el DAG y 33 para NSC. En
+`inst001` ninguna de las dos estrategias termina en 30 minutos (ver *Limitaciones*).
+
+`test_bb.py` comprueba cuatro cosas:
+- `sin` y `cos` por intervalos son sound y ajustados.
+- El jacobiano por intervalos cumple el valor medio: `f(x) − f(y) ∈ J(X)·(x − y)`.
+  Es la propiedad de la que depende que Newton sea sound.
+- En el ejemplo (1), las dos estrategias encuentran las mismas 2 soluciones, las
+  certifican y NSC usa menos cajas.
+- Soundness del árbol completo: con una solución fabricada como en `test_nsc.py`,
+  alguna caja solución la contiene.
+
+La prueba del jacobiano detecta derivadas con bug (por ejemplo, derivar `sin` como
+`sin`). La del árbol es más débil: una bisección que pierde el 10% de cada mitad la
+hace fallar en 9 de 24 árboles, y si pierde solo el 1% no la detecta.
+
+## Instancias aleatorias y experimento (Sección 4.2)
+
+`generador.py` replica la estructura del generador del paper
+([vareyesr/ncsp_generator](https://github.com/vareyesr/ncsp_generator), del que salieron
+`inst001` e `inst002`), con los dominios como parámetro:
+
+- **`mult`, ecuación (6):** cada restricción es `Π_k (a + Σ_i b·t)^d = R`, con
+  `d ∈ {−1, 1}`.
+- **`func`, ecuación (7):** cada restricción es `Σ_k u(a + Σ_i b·t) = R`, con
+  `u ∈ {log, exp, x⁻¹, identidad}`.
+- Los términos `t` salen de un pool con las n variables y algunas potencias al
+  cuadrado o al cubo. `a` y `b` son enteros en `[-5, 5]`.
+- En total hay P sumas y Q términos. `R` se calcula en un punto aleatorio de
+  `[-1, 1]ⁿ`, que queda anotado como solución conocida.
+
+`experimento.py` resuelve cada instancia con REF y NSC y calcula `gt` y `gb` con la
+Definición 3. Solo promedia las instancias que **ambas** estrategias terminaron, y
+comprueba en cada una que la solución conocida quedó dentro de una caja solución.
+Las decisiones están documentadas como G1–G2 y E1–E4 en los docstrings. Con
+`--reanudar` se retoma una corrida interrumpida sin repetir los árboles ya resueltos.
+
+**Resultados.** 10 instancias por P y tipo, límite de 300 s por árbol, dominios
+`[-2, 2]`. `n` es el número de instancias que ambas estrategias terminaron (las
+únicas que entran al promedio); gt y gb > 1 significa que NSC gana:
+
+| P | `mult` n | `mult` gt | `mult` gb | `func` n | `func` gt | `func` gb |
+|---|---|---|---|---|---|---|
+| 8 | 7 | **2.46** | **3.62** | 4 | **2.48** | **3.18** |
+| 10 | 8 | 1.02 | 1.34 | 7 | 1.14 | 1.58 |
+| 12 | 7 | 0.79 | 1.04 | 8 | 0.79 | 1.14 |
+| 14 | 3 | 0.79 | 1.00 | 5 | 0.72 | 1.02 |
+| 16 | 2 | 0.85 | 1.03 | 4 | 0.75 | 1.05 |
+
+- **Se reproduce la tendencia de las Fig. 6 y 7 del paper:** NSC gana claramente con
+  pocas sumas (P = 8: entre 3 y 3.6 veces menos cajas, 2.5 veces más rápido), y la
+  ganancia cae a ~1 a medida que crece P. El paper lo explica igual: con más sumas,
+  la caja de `b` se ensancha y la proyección filtra menos.
+- **La magnitud es menor que en el paper**, que reporta ganancias de 30 a 90 con
+  P = 8. La diferencia más probable son los dominios: con `[-1e8, 1e8]` el filtrado
+  inicial pesa mucho más.
+- **Con P ≥ 12, gt queda en ~0.8:** NSC no reduce el árbol y su costo extra se nota.
+  En el paper queda en ~1; en Python, la proyección pesa más en proporción.
+- **Ninguna solución perdida:** en todos los árboles terminados, la solución conocida
+  quedó dentro de una caja solución.
+- **Muchos árboles truncados,** sobre todo con P grande, por los polos de los
+  términos `(suma)^(-1)` (ver *Limitaciones*). Los promedios de P = 14 y 16 se basan
+  en pocas instancias (2 a 5).
+
+Los datos completos están en `experimentos/resultados_mult.csv` y
+`experimentos/resultados_func.csv`.
 
 ## Arquitectura
 
@@ -254,10 +393,15 @@ matrix_extractor.py    DAG -> SistemaLineal (A exacta, c, y, w, subsistema de pr
 exportator.py          pipeline completo; exportar_npz / exportar_txt
 validator.py           auditoria (V1-V5)
 nsc.py                 contractor NSC (Sec. 3.3): conditioner, HC4-revise, punto fijo
+bb.py                  branch & bound por intervalos sobre REF o NSC
+newton.py              Newton intervalar, jacobiano por intervalos, SmearSumRel
+generador.py           instancias aleatorias como las de la Sec. 4.2 del paper
+experimento.py         experimento de la Sec. 4.2: REF vs NSC por cada P
 batch_processor.py     recorre una carpeta
 main.py                CLI
 test_paper.py          regresion sobre el ejemplo (1) del paper
 test_nsc.py            conditioner del paper, P*A = PA, soundness de NSC
+test_bb.py             sin/cos, jacobiano, ejemplo (1) con B&B, soundness, generador
 ```
 
 El parseo usa el módulo `ast` de Python con un recorrido iterativo. No usa SymPy,
@@ -322,4 +466,10 @@ solo por conveniencia.
 - Si el coeficiente de la raíz no es 1, el `rhs` se divide en float. NSC lo
   compensa ensanchando ese valor 2 ulps. Los literales
   decimales se interpretan como el racional escrito (`0.1` → `1/10`).
+- **El branch & bound no termina en `inst001`.** En 30 minutos, REF revisó 328 115
+  cajas y NSC 237 573, y ninguno encontró una solución todavía: el árbol se pierde en
+  los dominios de `[-1e8, 1e8]`. Va a unos 3–5 ms por caja, uno o dos órdenes de
+  magnitud más lento que Ibex en C++.
+- `sin` y `cos` no contraen hacia atrás (no hay regla de inversión); solo hacia
+  adelante.
 - Solo hay 3 instancias de prueba, y `inst001`/`inst002` vienen del mismo generador.

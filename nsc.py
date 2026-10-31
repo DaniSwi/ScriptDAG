@@ -303,9 +303,20 @@ def hc4_revise(prep, dom):
     """Una pasada forward + backward sobre todo el DAG.  False si vacia."""
     nodos = prep.inst.dag.nodes
     for nodo in nodos:
-        if nodo.kind in ('var', 'const'):
+        k = nodo.kind
+        if k in ('var', 'const'):
             continue
-        I = iv.interseccion(dom[nodo.id], evaluar_nodo(nodo, dom))
+        if k == 'add':
+            # mismos coeficientes que evaluar_nodo, pero ya convertidos a
+            # intervalo en Preparado (convertir Fraction en cada pasada era
+            # un tercio del tiempo del branch & bound)
+            const, items = prep.sumas[nodo.id]
+            F = const
+            for h, a, _ in items:
+                F = iv.suma(F, iv.mult(a, dom[h]))
+        else:
+            F = evaluar_nodo(nodo, dom)
+        I = iv.interseccion(dom[nodo.id], F)
         if I is None:
             return False
         dom[nodo.id] = I
