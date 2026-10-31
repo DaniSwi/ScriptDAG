@@ -13,13 +13,15 @@ import time
 import traceback
 
 from exportator import construir, exportar_npz, exportar_txt
+from bb import comparar_bb
 from nsc import comparar
 from validator import validar
 
 
 def procesar_carpeta(carpeta_entrada, carpeta_salida, calcular_dominios=True,
                      exportar_texto=False, validar_todo=True,
-                     distribuir_sumas_escaladas=False, correr_nsc=False):
+                     distribuir_sumas_escaladas=False, correr_nsc=False,
+                     correr_bb=False):
     os.makedirs(carpeta_salida, exist_ok=True)
     archivos = sorted(glob.glob(os.path.join(carpeta_entrada, '*.txt')))
     if not archivos:
@@ -56,6 +58,8 @@ def procesar_carpeta(carpeta_entrada, carpeta_salida, calcular_dominios=True,
                     raise RuntimeError("la auditoria fallo")
             if correr_nsc:
                 comparar(inst, sis)
+            if correr_bb:
+                comparar_bb(inst, sis, ruta=ruta)
             ok += 1
         except Exception as e:
             fallidos += 1

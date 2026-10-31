@@ -4,12 +4,16 @@ Implementa la Sección 3 de **Araya & Reyes (2019), *Enhancing interval constrai
 propagation by identifying and filtering n-ary subsystems*** (J. Glob. Optim. 74:1–20).
 Lee instancias `.txt` tipo Minibex, construye un DAG fusionando subexpresiones comunes,
 identifica las sumas n-arias y extrae el subsistema lineal asociado (Secciones 3.1–3.2).
-Encima de eso, `nsc.py` implementa el contractor **NSC** (Sección 3.3).
+Encima de eso, `nsc.py` implementa el contractor **NSC** (Sección 3.3) y `bb.py` un
+branch & bound por intervalos para medirlo igual que el paper (cajas y tiempo).
 
-**Qué falta:** la variante NSC+Simplex (§3.3.1), porque necesita un LP solver con cotas
-certificadas y el repo solo depende de numpy; y un solver branch & bound que bisecte.
-Sin ese solver no se puede reproducir la Tabla 1 del paper: NSC contrae una caja, pero
-no explora el árbol de búsqueda.
+**Qué falta:**
+- La variante NSC+Simplex (§3.3.1), porque necesita un LP solver con cotas
+  certificadas y el repo solo depende de numpy.
+- Poder resolver instancias realistas. Aun con Newton y SmearSumRel, en `inst001`
+  (8 variables, dominios `[-1e8, 1e8]`) ni REF ni NSC terminan en 30 minutos, y
+  ninguno encuentra una solución. Es el bloqueador para medir contra los benchmarks
+  del paper.
 
 ## Comandos
 
@@ -20,6 +24,10 @@ python3 main.py instances/inst001.txt
 python3 main.py instances/inst001.txt --txt   # además el .txt reescrito (opcional)
 python3 test_paper.py             # regresión contra el ejemplo (1) del paper
 python3 test_nsc.py               # conditioner del paper, P·A = PA, soundness de NSC
+python3 test_bb.py                # sin/cos, jacobiano, B&B sobre el ejemplo (1), soundness
+python3 main.py instances/inst001.txt --bb    # branch & bound REF vs NSC
+python3 experimento.py --tipo mult            # experimento de la Sec. 4.2 (horas)
+python3 experimento.py --tipo mult --reanudar # retoma una corrida interrumpida
 ```
 
 Sin dependencias salvo **numpy**. Requiere **Python ≥ 3.9** (`math.nextafter`).
@@ -28,7 +36,8 @@ no versionado).
 
 **Verificación esperada:**
 - `main.py --lote` imprime `3 exitosos | 0 fallidos` con 21 `[PASS]` y cero `[FAIL]`.
-- `test_paper.py` y `test_nsc.py` terminan en `Todo OK.` (`test_nsc.py` tarda unos 6 s).
+- `test_paper.py`, `test_nsc.py` y `test_bb.py` terminan en `Todo OK.` (`test_nsc.py`
+  tarda unos 6 s; `test_bb.py`, unos 15 s).
 
 Si tocas algo del núcleo, córrelos todos antes de dar nada por bueno.
 
@@ -44,12 +53,17 @@ matrix_extractor.py    DAG -> SistemaLineal (A exacta, c, y, w, subsistema de pr
   intervals.py         aritmética de intervalos sound con redondeo dirigido
   dominios.py          propagación de dominios por el DAG + muestreadores
 nsc.py                 contractor NSC: conditioner, HC4-revise, punto fijo (Sec. 3.3)
+bb.py                  branch & bound por intervalos sobre REF o NSC
+newton.py              Newton intervalar (Hansen-Sengupta), jacobiano, SmearSumRel
+generador.py           instancias aleatorias como las de la Sec. 4.2 (ec. 6 y 7)
+experimento.py         REF vs NSC por cada P, ganancia de la Definición 3
 exportator.py          construir() = pipeline completo; exportar_npz / exportar_txt
 validator.py           7 comprobaciones (V1, V2, V3, V4a, V4b, V4c, V5)
 batch_processor.py     recorre una carpeta
 main.py                CLI
 test_paper.py          regresión sobre el ejemplo (1)
 test_nsc.py            pruebas de NSC
+test_bb.py             pruebas del branch & bound, Newton, sin/cos y generador
 ```
 
 El sistema extraído es **`w_i = c_i + Σ_j A[i][j]·y_j`**, con una fila por cada nodo
@@ -71,6 +85,28 @@ Las decisiones que el paper no fija están documentadas como N1–N7 en el docst
 La más importante es N1: el pivote de Gauss–Jordan se elige por columna, en orden, y es
 el de mayor magnitud; en caso de empate se elige la fila con menos no-ceros, y los
 pivotes no se normalizan. Con esa regla se reproduce exactamente la `P` de la §3.3.2.
+
+### Branch & bound (`bb.py`)
+
+`resolver(inst, sis, usar_nsc)` explora en profundidad. Cada caja se contrae desde los
+dominios de sus variables (los nodos intermedios se recalculan, como en Ibex). Si
+queda vacía se descarta; si todas las variables miden menos que `eps` (1e-8) es caja
+solución; si no, se bisecta por la mitad la variable que elige SmearSumRel. Después de
+cada contracción se aplica Newton (`newton.py`), igual para REF y NSC, y Newton
+certifica las cajas solución con ε-inflación. Las decisiones están documentadas como
+S1–S7 en `bb.py` y T1–T5 en `newton.py`.
+
+Ojo con T1: el jacobiano se evalúa con los valores de los nodos sobre toda la caja,
+**nunca** con los dominios ya contraídos por HC4/NSC. Esos solo encierran los valores
+en las soluciones, y el valor medio necesita encerrarlos en toda la caja.
+
+Hay límites de cajas y de tiempo. Si se alcanzan, `completo=False`: un árbol truncado
+**no** sirve para comparar estrategias ni para afirmar que una solución no está.
+`comparar_bb` calcula `gt` y `gb` igual que la Tabla 1 del paper.
+
+Resultado de referencia, ejemplo (1) del paper: REF 203 cajas, NSC 45 (`gb = 4.5`,
+`gt = 2.1`). Ambos encuentran las mismas 2 soluciones, certificadas. El paper reporta
+83 y 33, con Ibex. Sin Newton eran 1217 y 69.
 
 ## Invariantes — no romper
 
@@ -134,7 +170,20 @@ violaciones cuando reemplazas por monkeypatch alguna de estas funciones con un b
 - `_proyectar_raiz_entera`: olvidar la rama negativa de una raíz par.
 
 Las tres se verificaron. Los dos primeros bugs se detectan en el ejemplo (1) y en
-inst001; el tercero, solo en inst001.
+inst001; el tercero, solo en inst001. La misma prueba detecta también un bug en
+`sin`: `intervals._contiene_fase` devolviendo siempre `False` (25 violaciones en el
+ejemplo (1)). **El validator no lo detecta**, porque en las instancias el argumento de
+`sin` mide más de 2π y nunca se ejecuta esa rama. Por eso `test_bb.py` tiene una
+prueba directa de `sin`/`cos`.
+
+### La prueba de que `test_bb.py` sirve
+
+- `test_bb.valor_medio` detecta derivadas con bug en `newton.py`. Derivar `sin` como
+  `sin` da 618 violaciones de 1500; olvidar un factor en la regla del producto, 1500
+  de 1500.
+- `test_bb.soundness_bb` es probabilística. Con una bisección que pierde una franja
+  de cada mitad (`bb._bisectar` modificado por monkeypatch), falla en 9 de 24 árboles
+  si la franja es del 10%, y en 0 de 24 si es del 1%.
 
 ## Formato del `.npz`
 
@@ -165,10 +214,21 @@ bisectables.
 
 ## Estado conocido y límites
 
-**NSC no gana nada en las 3 instancias de `instances/`.** Partiendo de la caja inicial
-([-1e8, 1e8]), NSC contrae exactamente lo mismo que REF. En el ejemplo (1) del paper,
-con dominios `[-1, 5]`, sí gana: reduce el volumen en 10^1.36 contra 10^0.15 de REF.
-El paper mide la ganancia dentro del branch & bound, en cajas pequeñas.
+**NSC no gana nada en las 3 instancias de `instances/` al contraer la caja inicial**
+([-1e8, 1e8]): contrae exactamente lo mismo que REF. En el ejemplo (1) del paper,
+con dominios `[-1, 5]`, sí gana: reduce el volumen en 10^1.36 contra 10^0.15 de REF,
+y en el branch & bound usa 4.5 veces menos cajas. En `inst001` el branch & bound no
+termina en 30 minutos con ninguna de las dos estrategias, aun con Newton y
+SmearSumRel: REF revisó 328 115 cajas y NSC 237 573, sin encontrar ninguna solución.
+El solver va a unos 3–5 ms por caja, uno o dos órdenes de magnitud más lento que Ibex.
+
+**Experimento de la Sec. 4.2** (`experimento.py`, 10 instancias por P y tipo, dominios
+`[-2, 2]`, 300 s por árbol; datos en `experimentos/resultados_*.csv`). Reproduce la
+tendencia de las Fig. 6 y 7: con P = 8, NSC gana gb = 3.62 (`mult`) y 3.18 (`func`),
+con gt ≈ 2.5; desde P = 12, gb ≈ 1 y gt ≈ 0.8. El paper reporta ganancias de 30 a 90
+con P = 8, probablemente por los dominios `[-1e8, 1e8]`. Ninguna solución conocida se
+perdió. Hay muchos árboles truncados con P grande (polos de `(suma)^(-1)`), así que
+los promedios de P = 14 y 16 se basan en 2 a 5 instancias.
 
 **Cobertura del parser: 5 de 10 variantes realistas de Minibex.** Medido. Rechaza:
 sección `constants`, desigualdad doble (`-1 <= x^2 <= 4`), restricción multilínea,
@@ -178,8 +238,13 @@ exponente fraccionario, notación científica, variables a ambos lados, `exp`/`l
 
 **`abs`, `min` y `max` parsean pero dan dominio `(-inf, inf)`** — sound pero inútil
 para filtrar. Faltan sus reglas en `intervals.funcion` (solo existe `Abs`, con
-mayúscula). `exp` y `log` sí están bien. En NSC, `sin`, `cos` y las demás funciones
-sin regla de inversión no contraen hacia atrás.
+mayúscula). `exp` y `log` sí están bien; desde B9, `exp` con desborde y `log`/`sqrt`
+de un argumento sin parte válida devuelven el límite del dominio en vez de
+`(-inf, inf)`, para no romper la isotonía (V4b lo detectó en instancias del
+generador). `sin` y `cos` se evalúan bien hacia adelante
+desde B8 (antes devolvían siempre [-1, 1]); por encima de |x| = 1e6 se devuelve
+[-1, 1] por precaución. En NSC, `sin`, `cos` y las demás funciones sin regla de
+inversión no contraen hacia atrás.
 
 **Aproximación.** La extracción del subsistema lineal es exacta en racionales; los
 dominios son sobre-aproximaciones. Quedan dos grietas menores:
@@ -197,13 +262,24 @@ diseño quedaron sin árbitro:
   se reproduce la fila `6|6` y la fila dependiente −1/6 del paper.
 
 **Solo hay 3 instancias** en `instances/`, y `inst001`/`inst002` vienen del mismo
-generador. No hay un benchmark real contra el cual medir. Los benchmarks del paper son
-los de COPRIN y los de https://github.com/vareyesr/ncsp_generator.
+generador. Para medir, `generador.py` produce instancias con la estructura de la
+Sec. 4.2 del paper, pero con dominios `[-2, 2]` (con `[-1e8, 1e8]` el solver no
+termina). Los benchmarks originales del paper son los de COPRIN y los de
+https://github.com/vareyesr/ncsp_generator.
+
+Las instancias `func` y las `mult` con P grande tienen términos `(suma)^(-1)` cuyo
+denominador se anula sobre una hipersuperficie. Las cajas que cruzan ese polo no se
+pueden descartar por intervalos, el árbol se llena de cajas de ancho `eps` sin
+certificar y no termina. `experimento.py` las cuenta como truncadas y no las promedia
+(E2).
 
 ### Pendientes
 
 - No hay licencia. Sin ella, formalmente nadie puede reutilizar el código.
-- NSC+Simplex (§3.3.1) y un branch & bound para medir contra la Tabla 1.
+- Resolver instancias del tamaño de `inst001` y los benchmarks originales (COPRIN,
+  ncsp_generator con `[-1e8, 1e8]`): implementar NSC dentro de Ibex (C++), como en el
+  paper.
+- NSC+Simplex (§3.3.1).
 
 ## Convenciones
 
@@ -212,8 +288,9 @@ los de COPRIN y los de https://github.com/vareyesr/ncsp_generator.
 - Finales de línea **LF**. Ojo en Windows: si editas con un script de Python en modo
   texto, escribe con `newline=''` o el archivo queda en CRLF y el diff completo cambia.
 - Cada módulo abre con un docstring que dice **qué bug o desviación arregla**, con el
-  código (D1…D6 para desviaciones respecto del paper, B1…B7 para bugs, N1…N7 para las
-  decisiones de NSC). Mantén esa trazabilidad al modificar.
+  código (D1…D6 para desviaciones respecto del paper, B1…B9 para bugs, N1…N7 para las
+  decisiones de NSC, S1…S7 para las del branch & bound, T1…T5 para las de Newton, G1…G2 para las del
+  generador y E1…E4 para las del experimento). Mantén esa trazabilidad al modificar.
 - Nombres de funciones y variables en español, igual que el resto del repo.
 - `GUIA-refactor-ScriptDAG.md` documenta paso a paso por qué cada archivo quedó así.
   Léelo antes de cambiar el núcleo (`dag_builder.py`, `matrix_extractor.py`).
