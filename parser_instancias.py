@@ -68,10 +68,11 @@ class Instancia:
         return len(self.ops)
 
 
-def parse_instance(ruta, distribuir_sumas_escaladas=False):
+def parse_instance(ruta, distribuir_sumas_escaladas=False, compartir=True):
     """Lee el archivo y devuelve una Instancia con el DAG ya construido."""
     inst = Instancia(ruta)
-    dag = DagBuilder(distribuir_sumas_escaladas=distribuir_sumas_escaladas)
+    dag = DagBuilder(distribuir_sumas_escaladas=distribuir_sumas_escaladas,
+                     compartir=compartir)
     inst.dag = dag
 
     with open(ruta, 'r') as f:

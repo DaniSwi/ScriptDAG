@@ -382,6 +382,30 @@ Las decisiones están documentadas como G1–G2 y E1–E4 en los docstrings. Con
 Los datos completos están en `experimentos/resultados_mult.csv` y
 `experimentos/resultados_func.csv`.
 
+### Con y sin preprocesamiento
+
+El paper compara tres estrategias (Sec. 3): HC4 sobre los **árboles** de expresión
+(sin preprocesamiento), HC4 sobre el **DAG** (REF) y **NSC**. La primera se obtiene
+con `construir(ruta, compartir=False)`: cada aparición de una subexpresión es un nodo
+propio y solo las variables se comparten. En el solver se llama `ARB`, usa el mismo
+Newton, bisector y parámetros que las otras dos, y `--bb` la incluye cuando se da la
+ruta de la instancia.
+
+En el ejemplo (1): ARB 249 cajas, REF 203 y NSC 45 (el paper reporta 325, 83 y 33).
+En las instancias aleatorias, con el mismo límite de 300 s:
+
+| | ARB (sin preprocesamiento) | REF (DAG) | NSC (DAG + NSC) |
+|---|---|---|---|
+| Terminadas, `mult` | 5 / 50 | 27 / 50 | **30 / 50** |
+| Terminadas, `func` | 9 / 50 | 29 / 50 | **34 / 50** |
+| gb de NSC vs ARB con P = 8 | — | — | **112** (`mult`), **114** (`func`) |
+
+Sin preprocesamiento casi ninguna instancia termina. Cuando ARB termina, NSC reduce
+el árbol entre 1 y 114 veces, con la ganancia más alta en P = 8 y bajando con P. Esas
+ganancias salen de 1 a 3 instancias por P (las únicas que ARB terminó, que además son
+las más fáciles), así que son indicativas; lo robusto es la diferencia en instancias
+terminadas.
+
 ## Arquitectura
 
 ```

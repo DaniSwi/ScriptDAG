@@ -45,9 +45,13 @@ from nsc import conditioner_de
 from parser_instancias import parse_instance
 
 
-def construir(ruta_instancia, calcular_dominios=True, distribuir_sumas_escaladas=False):
-    """parse -> DAG -> sistema lineal -> dominios.  Devuelve (inst, sis, dom)."""
-    inst = parse_instance(ruta_instancia, distribuir_sumas_escaladas)
+def construir(ruta_instancia, calcular_dominios=True, distribuir_sumas_escaladas=False,
+              compartir=True):
+    """parse -> DAG -> sistema lineal -> dominios.  Devuelve (inst, sis, dom).
+
+    compartir=False construye arboles de expresion sin CSE (L1 en dag_builder):
+    es la linea base "sin preprocesamiento" del paper."""
+    inst = parse_instance(ruta_instancia, distribuir_sumas_escaladas, compartir)
     sis = extraer_sistema_lineal(inst.dag)
     registrar_restricciones(sis, inst.raices, inst.ops, inst.rhs)
     dom = dominios.propagar_dominios(inst.dag, inst.var_domains) if calcular_dominios else None

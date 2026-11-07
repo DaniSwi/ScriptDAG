@@ -34,6 +34,10 @@ Decisiones (el paper usa Ibex; aqui hay que fijarlas explicitamente):
       solucion se intenta certificar con epsilon-inflacion
       (Newton.certificar): certificada = una caja apenas mas grande contiene
       exactamente una solucion.
+  S8  Tres estrategias, las de la Sec. 3 del paper: ARB = HC4 sobre los
+      arboles de expresion (sin preprocesamiento: inst construido con
+      compartir=False), REF = HC4 sobre el DAG, NSC = DAG + subsistema lineal.
+      Las tres usan el mismo Newton, bisector y ratio.
   S7  ratio del punto fijo REF/NSC dentro del arbol = 0.1 (en nsc.contraer el
       default es 1e-3).  Medido en el ejemplo (1): mismas cajas (+-10%) y
       casi la mitad del tiempo por caja.  Es el mismo para REF y NSC.
@@ -94,10 +98,12 @@ def _mejora(antes, despues, ratio):
 
 def resolver(inst, sis, usar_nsc=True, eps=1e-8, ratio=0.1, usar_newton=True,
              bisector='smear', max_cajas=100000, max_segundos=600.0,
-             restricciones=None):
+             restricciones=None, nombre=None):
     """Branch & bound completo.  restricciones permite reemplazar los lados
-    derechos (lo usa la prueba de soundness con soluciones fabricadas)."""
-    res = ResultadoBB('NSC' if usar_nsc else 'REF')
+    derechos (lo usa la prueba de soundness con soluciones fabricadas).
+    nombre etiqueta el resultado (por ejemplo 'ARB' para un inst construido
+    sin CSE); por defecto es 'NSC' o 'REF'."""
+    res = ResultadoBB(nombre or ('NSC' if usar_nsc else 'REF'))
     prep = Preparado(inst, sis, conditioner_de(sis) if usar_nsc else None)
     if restricciones is not None:
         prep.restricciones = restricciones
@@ -173,16 +179,29 @@ def distancia_a_soluciones(punto, soluciones):
     return mejor
 
 
+def _ganancia(base, otra):
+    if base.completo and otra.completo and otra.cajas and otra.tiempo > 0:
+        return f"gt = {base.tiempo / otra.tiempo:.2f}  gb = {base.cajas / otra.cajas:.2f}"
+    return "no comparable (algun arbol truncado)"
+
+
 def comparar_bb(inst, sis, ruta=None, **kw):
-    """Resuelve con REF y con NSC e imprime la comparacion (gt y gb del paper)."""
-    resultados = [resolver(inst, sis, usar_nsc=False, **kw),
-                  resolver(inst, sis, usar_nsc=True, **kw)]
+    """Resuelve con ARB (si hay ruta), REF y NSC e imprime la comparacion
+    (gt y gb del paper).  ARB necesita la ruta para reconstruir sin CSE."""
+    resultados = []
+    if ruta is not None:
+        from exportator import construir
+        inst_arb, sis_arb, _ = construir(ruta, compartir=False)
+        resultados.append(resolver(inst_arb, sis_arb, usar_nsc=False, nombre='ARB', **kw))
+    resultados += [resolver(inst, sis, usar_nsc=False, **kw),
+                   resolver(inst, sis, usar_nsc=True, **kw)]
     for r in resultados:
         print(f"  {r.resumen()}")
-    ref, nsc = resultados
-    if ref.completo and nsc.completo and nsc.cajas and nsc.tiempo > 0:
-        print(f"  ganancia NSC vs REF: gt = {ref.tiempo / nsc.tiempo:.2f}  "
-              f"gb = {ref.cajas / nsc.cajas:.2f}")
+    por = {r.estrategia: r for r in resultados}
+    print(f"  ganancia NSC vs REF: {_ganancia(por['REF'], por['NSC'])}")
+    if 'ARB' in por:
+        print(f"  ganancia REF vs ARB: {_ganancia(por['ARB'], por['REF'])}")
+        print(f"  ganancia NSC vs ARB: {_ganancia(por['ARB'], por['NSC'])}")
     punto = solucion_conocida(ruta) if ruta else None
     if punto is not None and len(punto) == len(inst.var_names):
         for r in resultados:
