@@ -11,6 +11,11 @@ subexpresiones comunes, identifica las sumas n-arias y extrae el subsistema line
 asociado, junto con dominios sound para cada nodo (Secciones 3.1–3.2). Encima de eso,
 `nsc.py` implementa el contractor **NSC** de la Sección 3.3.
 
+**Notebook para Colab:** [`colab/experimentos_nsc.ipynb`](colab/experimentos_nsc.ipynb)
+corre las pruebas, el ejemplo (1) con y sin preprocesamiento y los resultados del
+experimento, sin instalar nada:
+[abrir en Colab](https://colab.research.google.com/github/DaniSwi/ScriptDAG/blob/main/colab/experimentos_nsc.ipynb).
+
 **Alcance.** El proyecto implementa el NSC basado en el conditioner de Gauss–Jordan
 (§3.3.2) y un branch & bound por intervalos (`bb.py`) para medirlo como en el paper:
 cuántas cajas y cuánto tiempo necesita cada estrategia. La variante con simplex
