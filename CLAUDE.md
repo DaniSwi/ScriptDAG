@@ -108,6 +108,12 @@ Resultado de referencia, ejemplo (1) del paper: REF 203 cajas, NSC 45 (`gb = 4.5
 `gt = 2.1`). Ambos encuentran las mismas 2 soluciones, certificadas. El paper reporta
 83 y 33, con Ibex. Sin Newton eran 1217 y 69.
 
+**Sin preprocesamiento (ARB, S8).** `construir(ruta, compartir=False)` arma árboles de
+expresión sin CSE (L1 en `dag_builder.py`): cada aparición es un nodo propio, solo
+variables y constantes se comparten, y dentro de una suma no se juntan términos
+repetidos. Es la estrategia (1) del paper. En el ejemplo (1): ARB 249, REF 203,
+NSC 45 cajas (paper: 325, 83, 33). El camino por defecto (`compartir=True`) no cambió.
+
 ## Invariantes — no romper
 
 Estos puntos son el resultado de una revisión que encontró que la versión anterior
@@ -230,6 +236,12 @@ con P = 8, probablemente por los dominios `[-1e8, 1e8]`. Ninguna solución conoc
 perdió. Hay muchos árboles truncados con P grande (polos de `(suma)^(-1)`), así que
 los promedios de P = 14 y 16 se basan en 2 a 5 instancias.
 
+Con ARB en el mismo experimento: sin preprocesamiento terminan 5 de 50 instancias
+(`mult`) y 9 de 50 (`func`), contra 30 y 34 con NSC. Donde ARB termina, NSC reduce el
+árbol hasta 112–114 veces con P = 8, pero esas ganancias salen de 1 a 3 instancias
+por P. Al correr experimentos largos, usar `--procesos 6`: con 11 procesos la CPU
+llegó a 95 °C.
+
 **Cobertura del parser: 5 de 10 variantes realistas de Minibex.** Medido. Rechaza:
 sección `constants`, desigualdad doble (`-1 <= x^2 <= 4`), restricción multilínea,
 arreglos de variables (`x[3] in [0,1]`), sección `function`. Acepta `min`/`max`/`abs`,
@@ -289,8 +301,8 @@ certificar y no termina. `experimento.py` las cuenta como truncadas y no las pro
   texto, escribe con `newline=''` o el archivo queda en CRLF y el diff completo cambia.
 - Cada módulo abre con un docstring que dice **qué bug o desviación arregla**, con el
   código (D1…D6 para desviaciones respecto del paper, B1…B9 para bugs, N1…N7 para las
-  decisiones de NSC, S1…S7 para las del branch & bound, T1…T5 para las de Newton, G1…G2 para las del
-  generador y E1…E4 para las del experimento). Mantén esa trazabilidad al modificar.
+  decisiones de NSC, S1…S8 para las del branch & bound, T1…T5 para las de Newton, G1…G2 para las del
+  generador, E1…E4 para las del experimento y L1 para el modo sin CSE). Mantén esa trazabilidad al modificar.
 - Nombres de funciones y variables en español, igual que el resto del repo.
 - `GUIA-refactor-ScriptDAG.md` documenta paso a paso por qué cada archivo quedó así.
   Léelo antes de cambiar el núcleo (`dag_builder.py`, `matrix_extractor.py`).

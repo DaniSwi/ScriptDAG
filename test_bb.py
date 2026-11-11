@@ -16,6 +16,9 @@ sin/cos por intervalos (B8).
      test_nsc._caso_con_solucion) alguna caja solucion la contiene.
   5. Generador (generador.py): las instancias pasan la auditoria y el arbol
      encuentra la solucion anotada.
+  6. Modo arboles (sin preprocesamiento, L1): solo se comparten variables y
+     constantes, pasa la auditoria y ARB encuentra las mismas 2 soluciones
+     del ejemplo (1) con mas cajas que REF y NSC (orden del paper: 325/83/33).
 
     python test_bb.py
 """
@@ -180,10 +183,38 @@ def test_generador():
     print("[PASS] generador: 6 instancias auditadas, solucion conocida encontrada (REF y NSC)")
 
 
+def test_modo_arboles():
+    import os
+    import tempfile
+    from validator import validar
+    fd, ruta = tempfile.mkstemp(suffix='.txt')
+    with os.fdopen(fd, 'w') as f:
+        f.write(tn.EJEMPLO_1_TXT)
+    try:
+        arb, sis_a, dom_a = construir(ruta, compartir=False)
+        dag, sis_d, _ = construir(ruta)
+        compartidos = [n for n in arb.dag.nodes if n.in_degree > 1 and n.kind not in ('var', 'const')]
+        assert not compartidos, f"el modo arboles compartio nodos: {compartidos}"
+        assert len(arb.dag.nodes) > len(dag.dag.nodes)
+        assert validar(arb, sis_a, dom_a, verbose=False).ok, "auditoria del modo arboles fallo"
+        r_arb = resolver(arb, sis_a, usar_nsc=False, nombre='ARB')
+        r_ref = resolver(dag, sis_d, usar_nsc=False)
+        r_nsc = resolver(dag, sis_d, usar_nsc=True)
+    finally:
+        os.remove(ruta)
+    assert r_arb.completo and len(r_arb.soluciones) == 2 and all(r_arb.certificadas)
+    for s in r_arb.soluciones:
+        assert max(abs(x) for x in _residuos(_centro(s))) < 1e-6
+    assert r_arb.cajas > r_ref.cajas > r_nsc.cajas,         f"no se cumple ARB > REF > NSC: {r_arb.cajas}, {r_ref.cajas}, {r_nsc.cajas}"
+    print(f"[PASS] modo arboles: ARB {r_arb.cajas} > REF {r_ref.cajas} > NSC {r_nsc.cajas} "
+          "cajas, 2 soluciones certificadas")
+
+
 if __name__ == "__main__":
     test_trig_sound()
     test_jacobiano_valor_medio()
     test_ejemplo_1()
     test_soundness_bb()
     test_generador()
+    test_modo_arboles()
     print("\nTodo OK.")

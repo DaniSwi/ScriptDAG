@@ -23,6 +23,16 @@ Representacion canonica de un nodo:
     pow   data = Fraction (exponente)        args = (base,)
     func  data = nombre                      args = (argumentos)
 
+Modo sin CSE (compartir=False, L1): linea base "HC4 sobre los arboles de
+expresion" del paper (Sec. 3: el ejemplo (1) da 325 cajas con arboles, 83 con
+el DAG y 33 con NSC).  Cada aparicion de una subexpresion es un nodo propio,
+tambien entre restricciones; solo las variables y las constantes siguen siendo
+un nodo unico, porque una variable tiene un solo dominio.  Dentro de una suma
+tampoco se juntan los terminos repetidos: 5*x2 - x2 queda con dos apariciones
+de x2, como en el arbol original.  La normalizacion
+(sumas n-arias, coeficientes afuera) se mantiene igual, para que la diferencia
+con el DAG sea exactamente la fusion de nodos equivalentes.
+
 Un nodo 'add' representa   const + sum(coefs[i] * args[i])   -> una fila de A.
 Un nodo 'mul' NUNCA lleva coeficiente numerico (va afuera) -> una columna de A.
 """
@@ -84,14 +94,22 @@ class ParseError(Exception):
 class DagBuilder:
     """DAG con hash-consing.  Una instancia por sistema; sin estado global."""
 
-    def __init__(self, distribuir_sumas_escaladas=False):
+    def __init__(self, distribuir_sumas_escaladas=False, compartir=True):
         self._cache = {}        # clave canonica -> DagNode
+        self.compartir = compartir   # False: modo arboles, sin CSE (L1)
         self.nodes = []         # indexado por id; los hijos siempre tienen id menor
         self.raices = []        # nodos raiz (uno por restriccion)
         self.distribuir_sumas_escaladas = distribuir_sumas_escaladas
 
     # ------------------------------------------------------- fabrica de nodos
     def _get(self, clave, kind, data, args):
+        if not self.compartir and kind not in ('var', 'const'):
+            # L1: nodo nuevo y fuera del cache, asi nadie lo reutiliza
+            n = DagNode(len(self.nodes), kind, data, args)
+            self.nodes.append(n)
+            for a in args:
+                a.in_degree += 1
+            return n
         n = self._cache.get(clave)
         if n is not None:
             for _ in args:
@@ -147,14 +165,18 @@ class DagBuilder:
 
     def add(self, const, terminos):
         """Suma n-aria.  terminos = [(Fraction coef, DagNode)] con nodo != const."""
-        agrupado = {}
-        orden = []
-        for c, nodo in terminos:
-            if nodo.id not in agrupado:
-                agrupado[nodo.id] = [Fraction(0), nodo]
-                orden.append(nodo.id)
-            agrupado[nodo.id][0] += Fraction(c)      # "coefficients are summed up"
-        items = [(agrupado[i][0], agrupado[i][1]) for i in orden if agrupado[i][0] != 0]
+        if not self.compartir:
+            # L1: en un arbol de expresion, 5*x2 - x2 son dos apariciones de x2
+            items = [(Fraction(c), nodo) for c, nodo in terminos if c != 0]
+        else:
+            agrupado = {}
+            orden = []
+            for c, nodo in terminos:
+                if nodo.id not in agrupado:
+                    agrupado[nodo.id] = [Fraction(0), nodo]
+                    orden.append(nodo.id)
+                agrupado[nodo.id][0] += Fraction(c)      # "coefficients are summed up"
+            items = [(agrupado[i][0], agrupado[i][1]) for i in orden if agrupado[i][0] != 0]
         items.sort(key=lambda t: t[1].id)
         args = tuple(t[1] for t in items)
         coefs = tuple(t[0] for t in items)

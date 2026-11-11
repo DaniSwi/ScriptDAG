@@ -1,8 +1,14 @@
 """
 Capa 12 (NUEVA): experimento de la Sec. 4.2 (Fig. 6 y Fig. 7 del paper).
 
-Para cada P genera instancias con generador.py, las resuelve con REF y NSC
-(bb.py) y resume la ganancia relativa promedio de NSC respecto de REF, en
+Para cada P genera instancias con generador.py, las resuelve con las tres
+estrategias de la Sec. 3 del paper (bb.py, S8):
+
+    ARB  HC4 sobre los arboles de expresion: SIN preprocesamiento
+    REF  HC4 sobre el DAG (la referencia de la Tabla 1)
+    NSC  DAG + contraccion del subsistema lineal
+
+y resume la ganancia relativa promedio de una estrategia respecto de otra, en
 tiempo (gt) y en cajas (gb), con la Definicion 3 del paper:
 
     t_r(a, b, pi) = T(a, pi) / (T(a, pi) + T(b, pi))
@@ -17,9 +23,9 @@ Decisiones:
   E1  Dominio [-2, 2] por defecto (el paper usa [-1e8, 1e8]; en Python el
       branch & bound no termina con eso).  n = 8, pool de 12 terminos y
       Q = 100, como en el paper.
-  E2  Solo entran al promedio las instancias que AMBAS estrategias
-      terminaron dentro del limite: comparar un arbol truncado no tiene
-      sentido.  Las truncadas se cuentan y se reportan.
+  E2  En cada comparacion solo entran al promedio las instancias que las DOS
+      estrategias comparadas terminaron dentro del limite: comparar un arbol
+      truncado no tiene sentido.  Las truncadas se cuentan y se reportan.
   E3  Las tareas (instancia, estrategia) corren en paralelo en varios
       procesos.  Los tiempos se miden con la maquina cargada; afecta a REF y
       NSC por igual, pero gb (cajas) es la metrica que no depende de eso.
@@ -43,11 +49,15 @@ CAMPOS = ['tipo', 'P', 'semilla', 'ruta', 'estrategia', 'cajas', 'tiempo',
           'completo', 'soluciones', 'certificadas', 'sol_conocida_dentro']
 
 
+ESTRATEGIAS = ('ARB', 'REF', 'NSC')
+COMPARACIONES = (('REF', 'NSC'), ('ARB', 'REF'), ('ARB', 'NSC'))   # (base, otra)
+
+
 def _tarea(args):
-    tipo, P, semilla, ruta, usar_nsc, limite = args
-    inst, sis, _ = construir(ruta)
-    r = bb.resolver(inst, sis, usar_nsc=usar_nsc, max_segundos=limite,
-                    max_cajas=10 ** 7)
+    tipo, P, semilla, ruta, estrategia, limite = args
+    inst, sis, _ = construir(ruta, compartir=estrategia != 'ARB')
+    r = bb.resolver(inst, sis, usar_nsc=estrategia == 'NSC', nombre=estrategia,
+                    max_segundos=limite, max_cajas=10 ** 7)
     dentro = ''
     if r.completo:
         p = bb.solucion_conocida(ruta)
@@ -60,14 +70,14 @@ def _tarea(args):
 
 
 def ganancia(pares):
-    """Definicion 3: pares = [(valor REF, valor NSC)] -> ganancia de NSC."""
+    """Definicion 3: pares = [(valor base, valor otra)] -> ganancia de otra."""
     a = sum(ref / (ref + nsc) for ref, nsc in pares if ref + nsc > 0)
     b = sum(nsc / (ref + nsc) for ref, nsc in pares if ref + nsc > 0)
     return a / b if b > 0 else float('nan')
 
 
-def resumir(filas):
-    """{(tipo, P): dict con n, truncadas, gt, gb, ...}"""
+def resumir(filas, base='REF', otra='NSC'):
+    """{(tipo, P): dict con n, truncadas, gt, gb, ...} de otra respecto de base."""
     por = {}
     for f in filas:
         por.setdefault((f['tipo'], int(f['P']), int(f['semilla'])), {})[f['estrategia']] = f
@@ -76,9 +86,9 @@ def resumir(filas):
         r = resumen.setdefault((tipo, P), {'total': 0, 'truncadas': 0, 'tiempos': [],
                                            'cajas': [], 'sol_perdida': 0})
         r['total'] += 1
-        if 'REF' not in d or 'NSC' not in d:
+        if base not in d or otra not in d:
             continue
-        ref, nsc = d['REF'], d['NSC']
+        ref, nsc = d[base], d[otra]
         for x in (ref, nsc):
             if str(x['sol_conocida_dentro']) == 'False':
                 r['sol_perdida'] += 1
@@ -94,9 +104,10 @@ def resumir(filas):
     return resumen
 
 
-def imprimir(resumen):
+def imprimir(resumen, base='REF', otra='NSC'):
+    print(f"--- {otra} vs {base} ---")
     print(f"{'tipo':5s} {'P':>3s} {'n':>3s} {'trunc':>5s} {'gt':>7s} {'gb':>7s} "
-          f"{'cajas REF':>10s} {'cajas NSC':>10s}  sol. perdidas")
+          f"{'cajas ' + base:>10s} {'cajas ' + otra:>10s}  sol. perdidas")
     for (tipo, P), r in sorted(resumen.items()):
         cr = sum(c[0] for c in r['cajas']) / max(r['n'], 1)
         cn = sum(c[1] for c in r['cajas']) / max(r['n'], 1)
@@ -115,6 +126,8 @@ def main():
     ap.add_argument('--limite', type=float, default=300.0, help='segundos por arbol')
     ap.add_argument('--procesos', type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument('--carpeta', default='experimentos')
+    ap.add_argument('--estrategias', nargs='+', choices=ESTRATEGIAS,
+                    default=list(ESTRATEGIAS))
     ap.add_argument('--reanudar', action='store_true',
                     help='agrega al CSV existente y salta los arboles ya resueltos; '
                          'usar con los MISMOS parametros que la corrida original')
@@ -127,8 +140,8 @@ def main():
         rutas = generador.escribir(carpeta_inst, a.tipo, a.n, P, a.Q,
                                    (-a.dominio, a.dominio), semillas)
         for s, ruta in zip(semillas, rutas):
-            for usar_nsc in (False, True):
-                tareas.append((a.tipo, P, s, ruta, usar_nsc, a.limite))
+            for e in a.estrategias:
+                tareas.append((a.tipo, P, s, ruta, e, a.limite))
 
     salida = os.path.join(a.carpeta, f"resultados_{a.tipo}.csv")
     filas = []
@@ -136,8 +149,7 @@ def main():
         with open(salida, newline='') as f:
             filas = list(csv.DictReader(f))
         hechas = {(int(r['P']), int(r['semilla']), r['estrategia']) for r in filas}
-        tareas = [t for t in tareas
-                  if (t[1], t[2], 'NSC' if t[4] else 'REF') not in hechas]
+        tareas = [t for t in tareas if (t[1], t[2], t[4]) not in hechas]
         print(f"reanudando: {len(filas)} arboles ya estaban en {salida}")
     print(f"{len(tareas)} arboles en {a.procesos} procesos -> {salida}")
     t0 = time.time()
@@ -152,8 +164,9 @@ def main():
                 filas.append(fila)
                 if k % 10 == 0 or k == len(tareas):
                     print(f"  {k}/{len(tareas)} arboles, {time.time() - t0:.0f}s", flush=True)
-    print()
-    imprimir(resumir(filas))
+    for base, otra in COMPARACIONES:
+        print()
+        imprimir(resumir(filas, base, otra), base, otra)
 
 
 if __name__ == '__main__':
